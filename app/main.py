@@ -474,7 +474,7 @@ class DieselMonitor:
 
         # Масло: если из контроллера – умножаем на 10, если из памяти – уже нормализовано
         if use_controller:
-            oil_val = oil_raw * 10 if oil_raw is not None and not is_invalid(oil_raw) else None
+            oil_val = oil_raw if oil_raw is not None and not is_invalid(oil_raw) else None
         else:
             oil_val = oil_raw
         oil_display = fmt(oil_val, 1)
@@ -632,47 +632,104 @@ class DieselMonitor:
         return f"{analog_name}={v}"
 
     def update_running_state(self, rpm: float):
+        """Обновление состояния работы двигателя с задержкой для сбора данных"""
+
+        # Первый запуск - просто запоминаем состояние
         if self.unit_state.running is None:
             self.unit_state.running = rpm >= Constants.RPM_ON
             return
 
+        # ОСТАНОВКА: двигатель работал, а теперь остановился
         if self.unit_state.running and rpm <= Constants.RPM_OFF:
             self.unit_state.running = False
+
+            # ⏰ ЗАДЕРЖКА 3 СЕКУНДЫ перед сбором данных
+            # Это позволяет контроллеру обновить все параметры
+            print(f"⏰ Двигатель остановился. Ждем 3 секунды перед сбором данных...")
+            time.sleep(3)
+
+            # Теперь собираем актуальные данные
             reason = self.get_stop_reasons()
             snapshot = self.get_compact_snapshot_string(use_controller=True)
-            insert_event(self.conn, self.controller_id, "info",
-                         "Установка остановилась", details=reason, code="UNIT_STOP",
-                         filter_passed=1, snapshot=snapshot)
-            self.send_to_all(f"🛑 {self.unit_name()}: установка ОСТАНОВИЛАСЬ (RPM={rpm:.0f}).\n{reason}\ncode=UNIT_STOP")
+
+            # Определяем тип остановки
+            if "пожар" in reason.lower():
+                stop_type = "🔥 АВАРИЙНАЯ ОСТАНОВКА ПО ПОЖАРУ"
+                icon = "🔥🚨"
+                severity = "alarm"
+            elif "критическая температура" in reason.lower() or "температура" in reason.lower():
+                stop_type = "🌡️ АВАРИЙНАЯ ОСТАНОВКА ПО ТЕМПЕРАТУРЕ"
+                icon = "🌡️🚨"
+                severity = "alarm"
+            elif "давление масла" in reason.lower():
+                stop_type = "🛢️ АВАРИЙНАЯ ОСТАНОВКА ПО ДАВЛЕНИЮ МАСЛА"
+                icon = "🛢️🚨"
+                severity = "alarm"
+            elif "аварийная остановка" in reason.lower() or "авария" in reason.lower():
+                stop_type = "🛑 АВАРИЙНАЯ ОСТАНОВКА"
+                icon = "🛑🚨"
+                severity = "alarm"
+            else:
+                stop_type = "🛑 Установка остановилась"
+                icon = "🛑"
+                severity = "warn"
+
+            # Записываем событие в БД
+            insert_event(
+                self.conn, self.controller_id, severity,
+                stop_type, details=reason, code="UNIT_STOP",
+                filter_passed=1, snapshot=snapshot
+            )
+
+            # Формируем сообщение
+            message = f"{icon} {self.unit_name()}: {stop_type}\n"
+            message += reason
+            message += f"\n\ncode=UNIT_STOP"
+
+            # Отправляем уведомление
+            self.send_to_all(message)
             self.queue_status_reply("UNIT_STOP", full=True)
 
+        # ЗАПУСК: двигатель не работал, а теперь запустился
         elif (not self.unit_state.running) and rpm >= Constants.RPM_ON:
             self.unit_state.running = True
+
+            # ⏰ ЗАДЕРЖКА 3 СЕКУНДЫ перед сбором данных
+            # Даем двигателю время выйти на режим
+            print(f"⏰ Двигатель запустился. Ждем 3 секунды для стабилизации параметров...")
+            time.sleep(3)
+
+            # Собираем актуальные данные
             snapshot = self.get_compact_snapshot_string(use_controller=True)
-            insert_event(self.conn, self.controller_id, "info",
-                         "Установка запустилась", details=f"RPM={rpm:.0f}", code="UNIT_START",
-                         filter_passed=1, snapshot=snapshot)
-            self.send_to_all(f"🚀 {self.unit_name()}: установка ЗАПУСТИЛАСЬ (RPM={rpm:.0f}).\ncode=UNIT_START")
+
+            # Записываем событие в БД
+            insert_event(
+                self.conn, self.controller_id, "info",
+                "🚀 Установка запустилась",
+                code="UNIT_START", filter_passed=1, snapshot=snapshot
+            )
+
+            # Отправляем уведомление
+            self.send_to_all(
+                f"🚀 {self.unit_name()}: установка ЗАПУСТИЛАСЬ\n"
+                f"code=UNIT_START"
+            )
             self.queue_status_reply("UNIT_START", full=True)
 
     def get_stop_reasons(self, limit: int = 60) -> str:
+        """Получение подробных причин остановки"""
         reasons = []
+        reason_details = []
+
         try:
-            important_addrs = [70, 69, 71]
-            placeholders = ','.join(['?'] * len(important_addrs))
-            rows = self.conn.execute(
-                f"""
-                SELECT rc.name, rc.addr
+            # 1. Проверяем активные биты аварий и защит
+            cursor = self.conn.execute("""
+                SELECT rc.name, rc.addr, rc.group_name, lv.last_value_text,
+                       datetime(lv.last_ts, 'unixepoch') as last_time
                 FROM last_value lv
-                JOIN register_catalog rc ON rc.id=lv.catalog_id
+                JOIN register_catalog rc ON rc.id = lv.catalog_id
                 WHERE rc.kind='binary_bit'
                   AND lv.last_value_text='1'
-                  AND (
-                    (lower(rc.group_name) LIKE '%фикс%' AND lower(rc.group_name) LIKE '%защит%')
-                    OR (lower(rc.group_name) LIKE '%бинарные входы%')
-                    OR (lower(rc.group_name) LIKE '%бинарные выходы%')
-                    OR rc.addr IN ({placeholders})
-                  )
                   AND (
                     lower(rc.name) LIKE '%ост%'
                     OR lower(rc.name) LIKE '%sd%'
@@ -686,44 +743,92 @@ class DieselMonitor:
                     OR lower(rc.name) LIKE '%авария%'
                     OR lower(rc.name) LIKE '%прд%'
                     OR lower(rc.name) LIKE '%рво%'
-                    OR lower(rc.name) LIKE '%готов к нагрузке%'
-                    OR rc.addr IN ({placeholders})
+                    OR lower(rc.group_name) LIKE '%фикс%'
+                    OR lower(rc.group_name) LIKE '%защит%'
                   )
                 ORDER BY rc.addr ASC
                 LIMIT ?
-                """,
-                (*important_addrs, *important_addrs, limit)
-            ).fetchall()
+            """, (limit,))
+
+            rows = cursor.fetchall()
+
             for row in rows:
-                name, addr = row
+                name, addr, group, val, last_time = row
                 if name:
                     clean_name = clean_signal_name(name)
-                    reasons.append(f"[BIT_{addr}] {clean_name}")
+                    reason_details.append(f"[BIT_{addr}] {clean_name}")
 
-            # Проверяем критические аналоговые значения
+                    if "ост" in name.lower() or "shutdown" in name.lower() or "sd" in name.lower():
+                        reasons.append(f"🛑 Аварийная остановка: {clean_name}")
+                    elif "пожар" in name.lower():
+                        reasons.append(f"🔥 ПОЖАР: {clean_name}")
+                    elif "прд" in name.lower():
+                        reasons.append(f"⚠️ Предупреждение: {clean_name}")
+                    elif "рво" in name.lower():
+                        reasons.append(f"⚡ РВО (Расцепление Выключателя Общее): {clean_name}")
+                    else:
+                        reasons.append(f"⚠️ {clean_name}")
+
+            # 2. Проверяем критические аналоговые значения
             for ck, (val, _) in self.latest_by_name.items():
-                if ck == "Температура ОЖ" and val > 95:
-                    reasons.append(f"Критическая температура ОЖ: {val}°C")
-                elif ck == "Давление масла" and val < 0.8:
-                    reasons.append(f"Аварийно низкое давление масла: {val} Бар")
-                elif ck == "Напряжение АКБ" and val < 11.0:
-                    reasons.append(f"Критически низкое напряжение АКБ: {val}В")
-                elif ck == "Уровень топлива" and val < 10:
-                    reasons.append(f"Критически низкий уровень топлива: {val}%")
+                if ck == "Температура ОЖ":
+                    if val > 100:
+                        reasons.append(f"🌡️ КРИТИЧЕСКАЯ температура ОЖ: {val:.0f}°C (макс. 100°C)")
+                        reason_details.append(f"Температура ОЖ={val:.0f}°C")
+                    elif val > 95:
+                        reasons.append(f"🌡️ Аварийно высокая температура ОЖ: {val:.0f}°C (норма до 95°)")
+                        reason_details.append(f"Температура ОЖ={val:.0f}°C")
+
+                elif ck == "Давление масла":
+                    if val < 0.8:
+                        reasons.append(f"🛢️ КРИТИЧЕСКИ низкое давление масла: {val:.1f} Бар (мин. 0.8 Бар)")
+                        reason_details.append(f"Давление масла={val:.1f} Бар")
+                    elif val < 1.5:
+                        reasons.append(f"🛢️ Аварийно низкое давление масла: {val:.1f} Бар (норма 2-8 Бар)")
+                        reason_details.append(f"Давление масла={val:.1f} Бар")
+
+                elif ck == "Напряжение АКБ":
+                    if val < 18:
+                        reasons.append(f"🔋 КРИТИЧЕСКИ низкое напряжение АКБ: {val:.1f}В (мин. 18В)")
+                        reason_details.append(f"АКБ={val:.1f}В")
+                    elif val > 32:
+                        reasons.append(f"🔋 КРИТИЧЕСКИ высокое напряжение АКБ: {val:.1f}В (макс. 32В)")
+                        reason_details.append(f"АКБ={val:.1f}В")
+
+                elif ck == "Уровень топлива":
+                    if val < 10:
+                        reasons.append(f"⛽ КРИТИЧЕСКИ низкий уровень топлива: {val:.0f}%")
+                        reason_details.append(f"Топливо={val:.0f}%")
+                    elif val < 20:
+                        reasons.append(f"⛽ Низкий уровень топлива: {val:.0f}% (пополните до 20%)")
+                        reason_details.append(f"Топливо={val:.0f}%")
+
+            # 3. Проверяем флаги аварий
+            if not reasons:
+                if self.alarm_flags.any_stop == 1:
+                    reasons.append("🛑 Остановка по флагу: Ав Любая Ост")
+                if self.alarm_flags.any_rvo == 1:
+                    reasons.append("⚡ Остановка по флагу: Ав Любое РВО")
+                if self.alarm_flags.any_fail == 1:
+                    reasons.append("❌ Остановка по флагу: Ав Любой Сбй")
+                if self.alarm_flags.any_prd == 1:
+                    reasons.append("⚠️ Предупреждение: Ав Любое Прд")
+
+            if not reasons:
+                return "Причина остановки не определена (нет активных аварий/защит)"
+
+            # Формируем детальный ответ
+            result = "🚨ПРИЧИНЫ:\n"
+            result += "\n".join(f"• {r}" for r in reasons[:limit])
+
+            if reason_details:
+                result += f"\n\n📋Детали:\n" + "\n".join(f"• {d}" for d in reason_details[:10])
+
+            return result
+
         except Exception as e:
             print(f"Error getting stop reasons: {e}")
-
-        if not reasons:
-            if self.alarm_flags.any_stop == 1:
-                return "Активен флаг: Ав Любая Ост"
-            if self.alarm_flags.any_rvo == 1:
-                return "Активен флаг: Ав Любое РВО"
-            if self.alarm_flags.any_fail == 1:
-                return "Активен флаг: Ав Любой Сбй"
-            if self.alarm_flags.any_prd == 1:
-                return "Активен флаг: Ав Любое Прд"
-            return "Причина не определена (нет активных причин/флагов)"
-        return "Причины (активные причины/защиты):\n" + "\n".join(f"- {s}" for s in reasons[:limit])
+            return f"❌ Ошибка при определении причины: {e}"
 
     def set_controller_online(self, new_state: bool, reason: str, ts: int):
         if self.controller_state.online is None:
@@ -757,39 +862,98 @@ class DieselMonitor:
 
     # ==================== ДИНАМИЧЕСКАЯ ЗАПИСЬ ====================
     def check_alarm_status(self) -> bool:
+        """Проверка состояния аварийного режима с подробным уведомлением"""
         try:
-            has_alarm = (
-                    self.alarm_flags.any_prd == 1 or
-                    self.alarm_flags.any_stop == 1 or
-                    self.alarm_flags.any_rvo == 1 or
-                    self.alarm_flags.any_fail == 1 or
-                    self.alarm_flags.mains_ok == 0
-            )
-            # Проверка аналоговых критических значений
-            if not has_alarm and self.latest_by_name:
-                temp_val = self.latest_by_name.get("Температура ОЖ", (None, None))[0]
-                if temp_val and temp_val > 95:
-                    has_alarm = True
-                if not has_alarm:
-                    oil_val = self.latest_by_name.get("Давление масла", (None, None))[0]
-                    if oil_val and oil_val < 0.8:
-                        has_alarm = True
-                if not has_alarm:
-                    batt_val = self.latest_by_name.get("Напряжение АКБ", (None, None))[0]
-                    if batt_val and (batt_val < 16 or batt_val > 32):
-                        has_alarm = True
-                if not has_alarm:
-                    fuel_val = self.latest_by_name.get("Уровень топлива", (None, None))[0]
-                    if fuel_val and fuel_val < 10:
-                        has_alarm = True
+            has_alarm = False
+            alarm_reasons = []  # Список причин аварии
+            alarm_details = []  # Детали по каждой причине
 
-            # Проверка активных битов, но только реально аварийных (исключаем статусные)
+            # 1. Проверка флагов аварий
+            if self.alarm_flags.any_prd == 1:
+                has_alarm = True
+                alarm_reasons.append("⚠️ Ав Любое Прд (предупреждение)")
+                alarm_details.append("Активен флаг общего предупреждения")
+
+            if self.alarm_flags.any_stop == 1:
+                has_alarm = True
+                alarm_reasons.append("🛑 Ав Любая Ост (аварийная остановка)")
+                alarm_details.append("Активен флаг аварийной остановки")
+
+            if self.alarm_flags.any_rvo == 1:
+                has_alarm = True
+                alarm_reasons.append("⚡ Ав Любое РВО (расцепление)")
+                alarm_details.append("Активен флаг расцепления выключателя")
+
+            if self.alarm_flags.any_fail == 1:
+                has_alarm = True
+                alarm_reasons.append("❌ Ав Любой Сбй (сбой)")
+                alarm_details.append("Активен флаг общего сбоя")
+
+            if self.alarm_flags.mains_ok == 0:
+                has_alarm = True
+                alarm_reasons.append("🌐 Авария сети (Mains Fail)")
+                alarm_details.append("Напряжение сети отсутствует или вышло из нормы")
+
+            # 2. Проверка аналоговых критических значений
+            temp_val = self.latest_by_name.get("Температура ОЖ", (None, None))[0]
+            if temp_val and temp_val > 95:
+                has_alarm = True
+                alarm_reasons.append(f"🌡️ КРИТИЧЕСКАЯ температура ОЖ: {temp_val:.0f}°C")
+                alarm_details.append(f"Температура охлаждающей жидкости превысила 95°C (факт: {temp_val:.0f}°C)")
+            elif temp_val and temp_val > 90:
+                # Предупреждение, но не авария
+                if not has_alarm:
+                    alarm_reasons.append(f"⚠️ Высокая температура ОЖ: {temp_val:.0f}°C")
+                    alarm_details.append(f"Температура ОЖ выше 90°C (факт: {temp_val:.0f}°C)")
+
+            oil_val = self.latest_by_name.get("Давление масла", (None, None))[0]
+            if oil_val and oil_val < 0.8:
+                has_alarm = True
+                alarm_reasons.append(f"🛢️ КРИТИЧЕСКИ низкое давление масла: {oil_val:.1f} Бар")
+                alarm_details.append(f"Давление масла упало ниже 0.8 Бар (факт: {oil_val:.1f} Бар)")
+            elif oil_val and oil_val < 1.5:
+                if not has_alarm:
+                    alarm_reasons.append(f"⚠️ Низкое давление масла: {oil_val:.1f} Бар")
+                    alarm_details.append(f"Давление масла ниже 1.5 Бар (факт: {oil_val:.1f} Бар)")
+
+            batt_val = self.latest_by_name.get("Напряжение АКБ", (None, None))[0]
+            if batt_val:
+                if batt_val < 16:
+                    has_alarm = True
+                    alarm_reasons.append(f"🔋 КРИТИЧЕСКИ низкое напряжение АКБ: {batt_val:.1f}В")
+                    alarm_details.append(f"Напряжение АКБ упало ниже 16В (факт: {batt_val:.1f}В)")
+                elif batt_val > 32:
+                    has_alarm = True
+                    alarm_reasons.append(f"🔋 КРИТИЧЕСКИ высокое напряжение АКБ: {batt_val:.1f}В")
+                    alarm_details.append(f"Напряжение АКБ превысило 32В (факт: {batt_val:.1f}В)")
+                elif batt_val < 18:
+                    if not has_alarm:
+                        alarm_reasons.append(f"⚠️ Низкое напряжение АКБ: {batt_val:.1f}В")
+                        alarm_details.append(f"Напряжение АКБ ниже 18В (факт: {batt_val:.1f}В)")
+                elif batt_val > 30:
+                    if not has_alarm:
+                        alarm_reasons.append(f"⚠️ Высокое напряжение АКБ: {batt_val:.1f}В")
+                        alarm_details.append(f"Напряжение АКБ выше 30В (факт: {batt_val:.1f}В)")
+
+            fuel_val = self.latest_by_name.get("Уровень топлива", (None, None))[0]
+            if fuel_val and fuel_val < 10:
+                has_alarm = True
+                alarm_reasons.append(f"⛽ КРИТИЧЕСКИ низкий уровень топлива: {fuel_val:.0f}%")
+                alarm_details.append(f"Уровень топлива упал ниже 10% (факт: {fuel_val:.0f}%)")
+            elif fuel_val and fuel_val < 20:
+                if not has_alarm:
+                    alarm_reasons.append(f"⚠️ Низкий уровень топлива: {fuel_val:.0f}%")
+                    alarm_details.append(f"Уровень топлива ниже 20% (факт: {fuel_val:.0f}%)")
+
+            # 3. Проверка активных аварийных битов в БД
             if not has_alarm:
                 cursor = self.conn.execute("""
-                    SELECT COUNT(*) FROM last_value lv
+                    SELECT rc.name, rc.addr, lv.last_value_text
+                    FROM last_value lv
                     JOIN register_catalog rc ON rc.id = lv.catalog_id
                     WHERE rc.kind='binary_bit' 
                     AND lv.last_value_text='1'
+                    AND rc.addr != 24 -- исключает холост номинал
                     AND (
                         lower(rc.name) LIKE '%авар%' 
                         OR lower(rc.name) LIKE '%ост%'
@@ -797,6 +961,7 @@ class DieselMonitor:
                         OR lower(rc.name) LIKE '%прд%'
                         OR lower(rc.name) LIKE '%warn%'
                         OR lower(rc.name) LIKE '%alarm%'
+                        OR lower(rc.name) LIKE '%рво%'
                     )
                     AND NOT (
                         lower(rc.name) LIKE '%норме%' 
@@ -806,31 +971,100 @@ class DieselMonitor:
                         OR lower(rc.name) LIKE '%авс%'
                         OR lower(rc.name) LIKE '%авг%'
                     )
+                    LIMIT 5
                 """)
-                count = cursor.fetchone()[0]
-                has_alarm = count > 0
+                active_bits = cursor.fetchall()
+                if active_bits:
+                    has_alarm = True
+                    for bit_name, bit_addr, bit_val in active_bits:
+                        clean_name = clean_signal_name(bit_name)
+                        alarm_reasons.append(f"🚨 {clean_name} [BIT_{bit_addr}]")
+                        alarm_details.append(f"Активен аварийный бит: {clean_name}")
 
+            # 4. Получаем свежий снапшот для уведомления
+            snapshot = self.get_compact_snapshot_string(use_controller=True)
+
+            # 5. Проверяем, изменилось ли состояние аварийного режима
             new_alarm_state = has_alarm
+
             if new_alarm_state != self.alarm_active:
                 self.alarm_active = new_alarm_state
-                state_text = "АВАРИЙНЫЙ РЕЖИМ" if new_alarm_state else "Обычный режим"
-                interval_text = "запись КАЖДУЮ СЕКУНДУ" if new_alarm_state else f"запись раз в {SNAPSHOT_EVERY_SEC} секунд"
-                snapshot = self.get_compact_snapshot_string(use_controller=True)
-                self.send_to_all(f"{'🚨' if new_alarm_state else '✅'} {self.unit_name()}: {state_text} - {interval_text}")
-                insert_event(
-                    self.conn, self.controller_id,
-                    "alarm" if new_alarm_state else "info",
-                    f"Режим записи изменен: {state_text}",
-                    details=f"Частота записи: {interval_text}",
-                    code="RECORDING_MODE_CHANGED", filter_passed=1, snapshot=snapshot
-                )
-                print(f"[{datetime.now()}] Режим записи изменен: {state_text}")
+
+                if new_alarm_state:
+                    # АВАРИЙНЫЙ РЕЖИМ ВКЛЮЧЕН
+                    state_text = "🚨 АВАРИЙНЫЙ РЕЖИМ 🚨"
+                    interval_text = "⏱️ запись КАЖДУЮ СЕКУНДУ"
+
+                    # Формируем подробное сообщение
+                    message = f"{state_text}\n"
+                    message += f"📋 {self.unit_name()}: {interval_text}\n\n"
+                    message += f"🔴ПРИЧИНЫ:\n"
+
+                    for reason in alarm_reasons[:5]:  # Максимум 5 причин
+                        message += f"• {reason}\n"
+
+                    if alarm_details:
+                        message += f"\n📊Детали:\n"
+                        for detail in alarm_details[:3]:
+                            message += f"• {detail}\n"
+
+                    message += f"\n\ncode=ALARM_MODE_ON"
+
+                    # Записываем в БД
+                    insert_event(
+                        self.conn, self.controller_id,
+                        "alarm",
+                        f"Режим записи изменен: АВАРИЙНЫЙ РЕЖИМ",
+                        details=f"Причины: {', '.join(alarm_reasons[:3])}\n\n{snapshot}",
+                        code="RECORDING_MODE_CHANGED",
+                        filter_passed=1,
+                        snapshot=snapshot
+                    )
+
+                    # Отправляем подробное уведомление
+                    self.send_to_all(message)
+
+                    # Дополнительно отправляем компактный статус
+                    self.queue_status_reply("ALARM_MODE_ON", full=False)
+
+                    print(f"[{datetime.now()}] 🔴 АВАРИЙНЫЙ РЕЖИМ ВКЛЮЧЕН")
+                    print(f"   Причины: {', '.join(alarm_reasons[:3])}")
+
+                else:
+                    # ОБЫЧНЫЙ РЕЖИМ ВКЛЮЧЕН (авария снята)
+                    state_text = "✅ Обычный режим"
+                    interval_text = f"⏱️ запись раз в {SNAPSHOT_EVERY_SEC} секунд"
+
+                    message = f"{state_text}\n"
+                    message += f"📋 {self.unit_name()}: {interval_text}\n\n"
+                    message += f"🟢 **Аварийный режим снят**\n"
+                    message += f"📊 Все параметры вернулись в норму\n\n"
+                    message += f"📊 **Текущие параметры:**\n{snapshot}"
+                    message += f"\n\ncode=ALARM_MODE_OFF"
+
+                    # Записываем в БД
+                    insert_event(
+                        self.conn, self.controller_id,
+                        "info",
+                        f"Режим записи изменен: Обычный режим",
+                        details=f"Аварийный режим снят\n\n{snapshot}",
+                        code="RECORDING_MODE_CHANGED",
+                        filter_passed=1,
+                        snapshot=snapshot
+                    )
+
+                    # Отправляем уведомление
+                    self.send_to_all(message)
+                    self.queue_status_reply("ALARM_MODE_OFF", full=False)
+
+                    print(f"[{datetime.now()}] ✅ АВАРИЙНЫЙ РЕЖИМ ВЫКЛЮЧЕН")
+
             return new_alarm_state
+
         except Exception as e:
             print(f"Error checking alarm status: {e}")
             return self.alarm_active
 
-    # Внутри класса DieselMonitor, метод _read_critical_values_from_controller
     def _read_critical_values_from_controller(self) -> Dict[int, Optional[float]]:
         """Синхронно читает ключевые параметры через Modbus, отфильтровывая невалидные."""
         if not self.mb:
@@ -855,7 +1089,7 @@ class DieselMonitor:
                 elif addr == 1036:
                     val = raw / 10.0
                 elif addr == 1038:
-                    val = raw / 10.0  # масло уже в Бар (или кгс/см²)
+                    val = raw  # масло уже в Бар (или кгс/см²)
                 elif addr == 1039:
                     val = raw
                 elif addr == 1040:
