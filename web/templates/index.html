@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Дизель Мониторинг</title>
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700;14..32,800&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'diesel-blue': '#002f87',
+                        'diesel-orange': '#ec6d22'
+                    },
+                    fontFamily: {
+                        'sans': ['Inter', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-gray-50 text-gray-800 antialiased">
+
+    <!-- Шапка -->
+    <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <div class="h-10 w-10 bg-diesel-blue rounded-lg flex items-center justify-center text-white font-bold text-xl">Д</div>
+                <span class="font-bold text-xl text-diesel-blue">ДИЗЕЛЬ <span class="font-light text-gray-500">МОНИТОРИНГ</span></span>
+            </div>
+            <a href="https://www.comd.ru" target="_blank" rel="noopener noreferrer"
+               class="flex items-center gap-2 text-diesel-orange hover:text-diesel-blue transition-colors duration-200 text-sm font-medium bg-orange-50 hover:bg-blue-50 px-4 py-2 rounded-full">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+                <span>Основной сайт</span>
+            </a>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-6">
+
+        <!-- Заголовок -->
+        <div class="mb-6">
+            <h1 class="text-2xl md:text-3xl font-bold text-diesel-blue mb-1">⚡ Система мониторинга ДГУ</h1>
+            <p class="text-gray-500 text-sm">Отслеживание параметров и событий в реальном времени</p>
+        </div>
+
+        <!-- Статистика -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+            <div class="stat-card bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="text-3xl font-bold text-diesel-blue" id="total-notifications-count">0</div>
+                        <div class="text-gray-500 text-sm mt-1">Событий сегодня</div>
+                    </div>
+                    <div class="w-10 h-10 bg-diesel-blue/10 rounded-full flex items-center justify-center text-diesel-blue">📊</div>
+                </div>
+            </div>
+            <div class="stat-card bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="text-3xl font-bold text-diesel-blue" id="active-units-count">0</div>
+                        <div class="text-gray-500 text-sm mt-1">Установок в сети</div>
+                    </div>
+                    <div class="w-10 h-10 bg-diesel-blue/10 rounded-full flex items-center justify-center text-diesel-blue">⚙️</div>
+                </div>
+            </div>
+            <div class="stat-card bg-gradient-to-br from-diesel-blue to-blue-900 text-white rounded-xl p-5 shadow-sm">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <div class="text-3xl font-bold" id="current-time-small">--:--:--</div>
+                        <div class="text-blue-200 text-sm mt-1">МСК</div>
+                    </div>
+                    <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">⏰</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Блок кнопок экспорта -->
+        <div class="flex flex-wrap gap-3 mb-6">
+            <button id="export-events-btn" class="btn-primary px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Скачать журнал событий
+            </button>
+            <button id="export-charts-btn" class="btn-secondary px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                </svg>
+                Скачать все графики
+            </button>
+            <button id="export-full-report-btn" class="btn-primary px-4 py-2 rounded-lg flex items-center gap-2 shadow-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m-6 0H6m12 0h-4M4 4h16v16H4V4z" />
+                </svg>
+                Полный отчет (Excel)
+            </button>
+        </div>
+
+        <!-- Основная сетка -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+            <!-- Левая колонка -->
+            <div class="lg:col-span-1 bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                <!-- Заголовок с вкладками -->
+                <div class="bg-gray-50 border-b border-gray-200">
+                    <div class="flex">
+                        <button id="tab-events"
+                                class="flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-diesel-blue text-diesel-blue">
+                            📋 Лента событий
+                        </button>
+                        <button id="tab-status"
+                                class="flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-transparent text-gray-500 hover:text-gray-700">
+                            📊 Текущий статус
+                        </button>
+                    </div>
+                    <!-- Фильтры для событий -->
+                    <div id="events-filter" class="px-5 py-2 border-t border-gray-200 space-y-2">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs text-gray-500">Установка:</span>
+                            <select id="controller-filter" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-1 focus:ring-diesel-orange focus:border-diesel-orange">
+                                <option value="">Все установки</option>
+                            </select>
+                        </div>
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs text-gray-500">Дата:</span>
+                            <div class="flex items-center gap-1">
+                                <input type="date" id="date-filter"
+                                       class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-1 focus:ring-diesel-orange focus:border-diesel-orange"
+                                       value="{{ now.strftime('%Y-%m-%d') }}">
+                                <button id="today-btn"
+                                        class="bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs px-2 py-1.5 rounded-lg transition">
+                                    Сегодня
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Контейнер для событий -->
+                <div id="events-container" class="block">
+                    <div id="notifications-container" class="notifications-container h-[600px] overflow-y-auto p-3 space-y-2">
+                        <div class="text-center text-gray-400 py-8 text-sm">Загрузка событий...</div>
+                    </div>
+                </div>
+
+                <!-- Контейнер для статуса -->
+                <div id="status-container" class="hidden">
+                    <div id="status-content" class="h-[700px] overflow-y-auto p-4">
+                        <div class="text-center text-gray-400 py-8">Выберите установку для просмотра статуса</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Правая колонка -->
+            <div class="lg:col-span-2 space-y-4">
+
+                <!-- Карточка с графиком -->
+                <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                    <div class="bg-gray-50 px-5 py-3 border-b border-gray-200">
+                        <div id="chart-header" class="flex justify-between items-center flex-wrap gap-2">
+                            <div class="text-gray-500 text-sm">📈 Параметры</div>
+                        </div>
+                        <div class="flex justify-between items-center mt-2 flex-wrap gap-2">
+                            <select id="parameter-select" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-1 focus:ring-diesel-orange">
+                                <option value="temp">🌡️ Температура ОЖ</option>
+                                <option value="oil_pressure">⚙️ Давление масла</option>
+                                <option value="fuel">⛽ Уровень топлива</option>
+                                <option value="battery">🔋 Напряжение АКБ</option>
+                                <option value="frequency">📡 Частота сети</option>
+                                <option value="RPM">🔄 Обороты</option>
+                            </select>
+                            <select id="chart-period-select" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-1 focus:ring-diesel-orange">
+                                <option value="6">Последние 6 часов</option>
+                                <option value="12">Последние 12 часов</option>
+                                <option value="24" selected>Последние 24 часа</option>
+                                <option value="48">Последние 48 часов</option>
+                                <option value="72">Последние 3 дня</option>
+                                <option value="168">Последние 7 дней</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="p-3">
+                        <canvas id="parameterChart" class="w-full h-64"></canvas>
+                    </div>
+                </div>
+
+                <!-- Блок текущих аварий -->
+                <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                    <div class="bg-gray-50 px-5 py-3 border-b border-gray-200">
+                        <div class="flex justify-between items-center">
+                            <div>
+                                <h2 class="font-semibold text-diesel-blue">🚨 Текущие аварии и предупреждения</h2>
+                                <p class="text-xs text-gray-400 mt-0.5">Актуальные события со всех установок</p>
+                            </div>
+                            <div id="alerts-summary" class="flex gap-2">
+                                <span class="text-xs bg-gray-100 text-gray-500 px-2 py-1 rounded-full">Загрузка...</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="current-alerts" class="p-3 alerts-fixed-height">
+                        <div class="text-center text-gray-400 py-4 text-sm">Загрузка аварий...</div>
+                    </div>
+                </div>
+
+                <!-- Карточка с AI чатом -->
+                <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                    <div class="bg-gray-50 px-5 py-3 border-b border-gray-200 flex justify-between items-center">
+                        <h2 class="font-semibold text-diesel-blue">🤖 AI Помощник</h2>
+                        <button id="export-act" class="btn-secondary text-white text-xs font-medium px-3 py-1.5 rounded-lg transition flex items-center gap-1">
+                            📄 Акт в сервис
+                        </button>
+                    </div>
+                    <div class="p-3">
+                        <div id="chat-messages" class="h-32 overflow-y-auto mb-2 space-y-1.5 bg-gray-50 rounded-lg p-2 text-xs"></div>
+                        <div class="flex gap-1.5">
+                            <input type="text" id="chat-input" placeholder="Задайте вопрос..."
+                                   class="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:ring-1 focus:ring-diesel-orange focus:border-diesel-orange">
+                            <button id="send-message" class="btn-primary px-3 py-1.5 rounded-lg transition text-xs font-medium">
+                                Отправить
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Нижняя часть с контактами -->
+        <div class="mt-8 pt-4 border-t border-gray-200 text-xs text-gray-500 flex flex-col md:flex-row justify-between items-center gap-2">
+            <div>150044, Ярославская область, г. Ярославль, пр-кт Ленинградский, зд. 33в, помещ. 401</div>
+            <div class="flex items-center gap-4">
+                <span>Пн-Пт: 8:30 - 17:00</span>
+                <span class="font-medium text-diesel-blue">+7 (800) 5112-461</span>
+                <span class="text-gray-400">По России бесплатно</span>
+                <button id="order-button" class="btn-secondary px-4 py-1.5 rounded-lg text-xs font-medium transition">
+                    ОСТАВИТЬ ЗАЯВКУ
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Модальное окно экспорта -->
+    <div id="exportModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">📥 Экспорт данных</h3>
+                <span class="modal-close" onclick="closeExportModal()">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div id="modalContent">
+                    <!-- Содержимое будет динамически заменяться -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel" onclick="closeExportModal()">Отмена</button>
+                <button class="btn-confirm" id="exportConfirmBtn">Скачать</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Скрипты -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+    <script src="/static/js/main.js"></script>
+    
+    <script>
+    // Глобальные функции для модального окна
+    function closeExportModal() {
+        document.getElementById('exportModal').classList.remove('active');
+    }
+    function openExportModal() {
+        document.getElementById('exportModal').classList.add('active');
+    }
+    </script>
+</body>
+</html>
