@@ -74,6 +74,8 @@ class DieselMonitoring {
         this.updateClock();
         this.adjustNotificationsHeight();
 
+        await this.initLLM();
+
         setInterval(() => this.loadCurrentAlerts(), 5000);
         setInterval(() => {
             if (this.currentTab === 'status') {
@@ -1800,31 +1802,196 @@ class DieselMonitoring {
         }
     }
 
-    sendMessage() {
+async sendMessage() {
         const input = document.getElementById('chat-input');
-        const message = input.value.trim();
-        if (!message) return;
+        const question = input.value.trim();
 
+        if (!question) return;
+
+        // Отображаем вопрос пользователя
+        this.addChatMessage(question, 'user');
+        input.value = '';
+
+        // Показываем индикатор загрузки
+        this.showTypingIndicator();
+
+        // Получаем текущие данные установки
+        const monitoringData = await this.getLLMMonitoringData();
+
+        try {
+            const response = await fetch('/api/llm/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    question: question,
+                    monitoring_data: monitoringData
+                })
+            });
+
+            const result = await response.json();
+
+            // Убираем индикатор загрузки
+            this.hideTypingIndicator();
+
+            if (result.success) {
+                this.addChatMessage(result.answer, 'assistant');
+
+                if (result.sources && result.sources.length > 0) {
+                    this.showSources(result.sources);
+                }
+            } else {
+                this.addChatMessage(result.answer, 'assistant');
+            }
+        } catch (error) {
+            this.hideTypingIndicator();
+            this.addChatMessage('❌ Ошибка подключения к AI помощнику. Проверьте, что сервер запущен.', 'assistant');
+            console.error('LLM error:', error);
+        }
+    }
+
+    async getLLMMonitoringData() {
+        let controllerId = this.currentControllerId;
+
+        if (!controllerId && this.controllers.length > 0) {
+            controllerId = this.controllers[0].id;
+        }
+
+        if (!controllerId) return {};
+
+        try {
+            const response = await fetch(`/api/status/${controllerId}`);
+            const data = await response.json();
+
+            if (data.status_data) {
+                const s = data.status_data;
+                return {
+                    unit_name: s.unit_name,
+                    rpm: s.engine?.rpm !== '—' ? parseFloat(s.engine.rpm) : null,
+                    temp: s.sensors?.temp !== '—' ? parseFloat(s.sensors.temp) : null,
+                    oil: s.sensors?.oil !== '—' ? parseFloat(s.sensors.oil) : null,
+                    battery: s.sensors?.battery !== '—' ? parseFloat(s.sensors.battery) : null,
+                    fuel: s.sensors?.fuel !== '—' ? parseFloat(s.sensors.fuel) : null,
+                    mode: s.general?.mains_state || 'НОРМАЛЬНЫЙ'
+                };
+            }
+            return {};
+        } catch (error) {
+            console.error('Ошибка получения данных для LLM:', error);
+            return {};
+        }
+    }
+
+    addChatMessage(text, role) {
         const container = document.getElementById('chat-messages');
         if (!container) return;
 
-        const userDiv = document.createElement('div');
-        userDiv.className = 'p-2 rounded-lg text-sm bg-diesel-blue text-white ml-8 mb-1';
-        userDiv.textContent = message;
-        container.appendChild(userDiv);
-
-        input.value = '';
-
-        const assistantDiv = document.createElement('div');
-        assistantDiv.className = 'p-2 rounded-lg text-sm bg-gray-100 text-gray-700 mr-8 mb-1';
-        assistantDiv.textContent = '⏳ Обработка запроса...';
-        container.appendChild(assistantDiv);
-
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `chat-message p-2 rounded-lg text-xs mb-1 ${
+            role === 'user'
+                ? 'bg-diesel-blue text-white ml-4'
+                : 'bg-gray-100 text-gray-700 mr-4'
+        }`;
+        // Добавляем перенос длинных строк
+        messageDiv.innerHTML = this.formatLLMMessage(this.wrapText(text, 60));
+        container.appendChild(messageDiv);
         container.scrollTop = container.scrollHeight;
+    }
 
-        setTimeout(() => {
-            assistantDiv.textContent = '✅ Данные загружены. Здесь будет ответ AI помощника.';
-        }, 1500);
+    wrapText(text, maxLength = 60) {
+        if (!text) return '';
+
+        const lines = [];
+        let currentLine = '';
+        const words = text.split(' ');
+
+        for (const word of words) {
+            if (word.length > maxLength) {
+                if (currentLine.trim()) {
+                    lines.push(currentLine.trim());
+                    currentLine = '';
+                }
+                for (let i = 0; i < word.length; i += maxLength) {
+                    lines.push(word.slice(i, i + maxLength));
+                }
+            } else if ((currentLine + ' ' + word).length > maxLength) {
+                if (currentLine.trim()) {
+                    lines.push(currentLine.trim());
+                }
+                currentLine = word;
+            } else {
+                currentLine += (currentLine ? ' ' : '') + word;
+            }
+        }
+
+        if (currentLine.trim()) {
+            lines.push(currentLine.trim());
+        }
+
+        return lines.join('<br>');
+    }
+
+    formatLLMMessage(text) {
+        let html = this.escapeHtml(text);
+        // Жирный текст
+        html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        // Курсив
+        html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+        // Списки
+        html = html.replace(/^• /gm, '<br>• ');
+        html = html.replace(/^- /gm, '<br>- ');
+        // Нумерация
+        html = html.replace(/(\d+\.) /g, '<br>$1 ');
+        // Переносы строк
+        html = html.replace(/\n/g, '<br>');
+        return html;
+    }
+
+    showSources(sources) {
+        const container = document.getElementById('chat-messages');
+        if (!container) return;
+
+        const sourcesDiv = document.createElement('div');
+        sourcesDiv.className = 'p-2 rounded-lg text-xs bg-blue-50 text-blue-600 mr-4 mb-1 mt-0.5';
+        sourcesDiv.innerHTML = '📚 <strong>Источники:</strong> ' + sources.map(s => s.source).join(', ');
+
+        container.appendChild(sourcesDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    showTypingIndicator() {
+        const container = document.getElementById('chat-messages');
+        if (!container) return;
+
+        const typingDiv = document.createElement('div');
+        typingDiv.id = 'typing-indicator';
+        typingDiv.className = 'p-2 rounded-lg text-xs bg-gray-100 text-gray-500 mr-4 mb-1';
+        typingDiv.innerHTML = '🤔 Агент думает <span class="typing-dots">...</span>';
+        container.appendChild(typingDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    hideTypingIndicator() {
+        const typingDiv = document.getElementById('typing-indicator');
+        if (typingDiv) typingDiv.remove();
+    }
+
+    async initLLM() {
+        console.log('🔄 Проверка LLM агента...');
+        try {
+            const response = await fetch('/api/llm/status');
+            const status = await response.json();
+
+            if (status.status === 'ready') {
+                console.log('✅ LLM агент готов');
+                this.addChatMessage('✅ AI помощник готов отвечать на вопросы по документации', 'assistant');
+            } else {
+                console.warn('⚠️ LLM агент не готов');
+                this.addChatMessage('⚠️ AI помощник временно недоступен. Проверьте настройки.', 'assistant');
+            }
+        } catch (error) {
+            console.error('❌ Ошибка подключения к LLM агенту:', error);
+            this.addChatMessage('❌ AI помощник недоступен. Убедитесь, что сервер запущен.', 'assistant');
+        }
     }
 
     updateClock() {

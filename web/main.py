@@ -12,7 +12,7 @@ import re
 import csv
 import io
 import time
-import json
+import sys
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -1182,6 +1182,7 @@ async def debug_check(db: sqlite3.Connection = Depends(get_db_dependency)):
         return {"error": str(e)}
 
 
+
 # Вспомогательные функции для экспорта
 
 def export_to_csv(data: List[dict], filename: str) -> StreamingResponse:
@@ -1418,3 +1419,111 @@ if __name__ == "__main__":
     logger.info(f"📁 Папка со статикой: {STATIC_DIR}")
     logger.info(f"📁 База данных: {DB_PATH or 'НЕ НАЙДЕНА'}")
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# ============================================================
+# LLM АГЕНТ
+# ============================================================
+
+# Добавляем путь к llm_agent
+LLM_AGENT_PATH = Path(__file__).parent.parent / "llm_agent"
+if str(LLM_AGENT_PATH) not in sys.path:
+    sys.path.insert(0, str(LLM_AGENT_PATH))
+
+# Глобальный экземпляр агента
+llm_agent = None
+
+
+def init_llm_agent():
+    """Инициализация LLM агента при старте сервера"""
+    global llm_agent
+    try:
+        from simple_agent import DieselLLMAgent
+        print("🔄 Инициализация LLM агента...")
+        llm_agent = DieselLLMAgent(auto_index=True)
+        print("✅ LLM агент готов")
+        return True
+    except ImportError as e:
+        print(f"❌ Не удалось импортировать LLM агент: {e}")
+        print("   Убедитесь, что установлены зависимости: pip install sentence-transformers chromadb openpyxl")
+        return False
+    except Exception as e:
+        print(f"❌ Ошибка инициализации LLM агента: {e}")
+        return False
+
+
+@app.on_event("startup")
+async def startup_llm():
+    """Запуск LLM агента при старте сервера"""
+    init_llm_agent()
+
+
+@app.get("/api/llm/status")
+async def llm_status():
+    """Проверка статуса LLM агента"""
+    if llm_agent is None:
+        return {"status": "not_initialized", "message": "LLM агент не инициализирован"}
+    try:
+        stats = llm_agent.get_stats()
+        return {"status": "ready", "stats": stats}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/llm/ask")
+async def llm_ask(request: dict):
+    """Запрос к LLM агенту"""
+    if llm_agent is None:
+        raise HTTPException(status_code=503, detail="LLM агент не готов")
+
+    question = request.get("question", "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Вопрос не может быть пустым")
+
+    monitoring_data = request.get("monitoring_data", {})
+
+    try:
+        if monitoring_data:
+            result = llm_agent.ask_with_status(question, monitoring_data)
+        else:
+            result = llm_agent.ask(question)
+
+        return {
+            "success": True,
+            "answer": result["answer"],
+            "sources": result.get("sources", []),
+            "question": question
+        }
+    except Exception as e:
+        logger.error(f"LLM ошибка: {e}")
+        return {
+            "success": False,
+            "answer": f"Извините, произошла ошибка: {str(e)}",
+            "sources": [],
+            "question": question
+        }
+
+
+@app.get("/api/llm/sources")
+async def llm_sources():
+    """Получить список загруженных источников документов"""
+    if llm_agent is None:
+        raise HTTPException(status_code=503, detail="LLM агент не готов")
+
+    try:
+        sources = llm_agent.get_available_sources()
+        return {"sources": sources}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/llm/refresh")
+async def llm_refresh():
+    """Принудительное обновление индекса документов"""
+    if llm_agent is None:
+        raise HTTPException(status_code=503, detail="LLM агент не готов")
+
+    try:
+        result = llm_agent.refresh_documents()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

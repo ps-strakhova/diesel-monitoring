@@ -458,6 +458,147 @@ body {
     border-color: #e5e7eb;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
+/* ======================================== */
+/* ДОПОЛНИТЕЛЬНЫЕ СТИЛИ ДЛЯ ЧАТА И АКТОВ */
+/* ======================================== */
+
+/* Увеличение высоты окна чата в 3 раза */
+#chat-messages {
+    min-height: 120px;
+    max-height: 360px;  /* было 128px (32*4), теперь в 3 раза больше */
+    height: auto;
+    overflow-y: auto;
+    transition: all 0.3s ease;
+}
+
+/* Перенос длинных слов в сообщениях */
+.chat-message {
+    word-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+    max-width: 100%;
+}
+
+/* Адаптация под большие экраны */
+@media (min-height: 800px) {
+    #chat-messages {
+        max-height: 450px;
+    }
+}
+
+@media (min-height: 1000px) {
+    #chat-messages {
+        max-height: 550px;
+    }
+}
+
+/* Анимация печати (индикатор "Агент думает") */
+.typing-dots {
+    display: inline-block;
+    animation: typingDots 1.4s infinite;
+}
+
+@keyframes typingDots {
+    0%, 20% {
+        content: ".";
+        opacity: 0;
+    }
+    40% {
+        content: "..";
+        opacity: 0.5;
+    }
+    60%, 100% {
+        content: "...";
+        opacity: 1;
+    }
+}
+
+/* Стили для выпадающего меню актов */
+.dropdown-menu {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 4px;
+    background: white;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    z-index: 50;
+    min-width: 160px;
+    overflow: hidden;
+}
+
+.dropdown-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 16px;
+    font-size: 12px;
+    transition: background 0.2s;
+}
+
+.dropdown-menu button:hover {
+    background-color: #f3f4f6;
+}
+
+.dropdown-menu button:first-child {
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+
+.dropdown-menu button:last-child {
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+/* Кнопки для разных типов актов */
+.btn-act-service {
+    background-color: #002f87 !important;
+}
+
+.btn-act-claim {
+    background-color: #ec6d22 !important;
+}
+
+.btn-act-workorder {
+    background-color: #10b981 !important;
+}
+
+/* Стили для индикатора загрузки */
+.typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    background-color: #f3f4f6;
+    border-radius: 12px;
+    color: #6b7280;
+    font-size: 12px;
+    width: fit-content;
+}
+
+.typing-dot {
+    width: 6px;
+    height: 6px;
+    background-color: #9ca3af;
+    border-radius: 50%;
+    animation: typingPulse 1.4s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(1) { animation-delay: 0s; }
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes typingPulse {
+    0%, 60%, 100% {
+        transform: translateY(0);
+        opacity: 0.4;
+    }
+    30% {
+        transform: translateY(-4px);
+        opacity: 1;
+    }
+}
 
 /* Адаптивность */
 @media (max-width: 768px) {
