@@ -1,3 +1,4 @@
+#app/main
 from __future__ import annotations
 
 import os
@@ -1037,9 +1038,8 @@ class DieselMonitor:
 
                     message = f"{state_text}\n"
                     message += f"📋 {self.unit_name()}: {interval_text}\n\n"
-                    message += f"🟢 **Аварийный режим снят**\n"
+                    message += f"🟢Аварийный режим снят\n"
                     message += f"📊 Все параметры вернулись в норму\n\n"
-                    message += f"📊 **Текущие параметры:**\n{snapshot}"
                     message += f"\n\ncode=ALARM_MODE_OFF"
 
                     # Записываем в БД

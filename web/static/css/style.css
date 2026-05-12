@@ -458,16 +458,16 @@ body {
     border-color: #e5e7eb;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
+
 /* ======================================== */
 /* ДОПОЛНИТЕЛЬНЫЕ СТИЛИ ДЛЯ ЧАТА И АКТОВ */
 /* ======================================== */
 
 /* Увеличение высоты окна чата в 3 раза */
 #chat-messages {
-    min-height: 120px;
-    max-height: 360px;  /* было 128px (32*4), теперь в 3 раза больше */
-    height: auto;
+    max-height: 400px;     /* как у блока аварий */
     overflow-y: auto;
+    min-height: 80px;
     transition: all 0.3s ease;
 }
 
@@ -477,19 +477,6 @@ body {
     word-break: break-word;
     white-space: normal;
     max-width: 100%;
-}
-
-/* Адаптация под большие экраны */
-@media (min-height: 800px) {
-    #chat-messages {
-        max-height: 450px;
-    }
-}
-
-@media (min-height: 1000px) {
-    #chat-messages {
-        max-height: 550px;
-    }
 }
 
 /* Анимация печати (индикатор "Агент думает") */

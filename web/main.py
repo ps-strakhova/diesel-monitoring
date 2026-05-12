@@ -13,6 +13,7 @@ import csv
 import io
 import time
 import sys
+from llm_agent.report_generator import ReportGenerator
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -37,6 +38,7 @@ app = FastAPI(title="Diesel Monitoring Web")
 # Подключаем статические файлы и шаблоны
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
 
 # Конфигурация
 EXCLUDED_NOTIFICATION_CODES = [
@@ -65,7 +67,8 @@ if not DB_PATH:
     logger.error("❌ База данных не найдена! Пути поиска: %s", possible_paths)
     DB_PATH = None
 
-
+# Создаём генератор отчётов
+report_gen = ReportGenerator(str(DB_PATH) if DB_PATH else None)
 # Функции для работы с БД
 def get_db_connection():
     """Создает новое соединение с БД."""
@@ -1182,6 +1185,45 @@ async def debug_check(db: sqlite3.Connection = Depends(get_db_dependency)):
         return {"error": str(e)}
 
 
+@app.post("/api/generate-report")
+async def generate_report(request: dict):
+    """Генерация акта по шаблону"""
+
+    report_type = request.get("report_type", "claim")
+    monitoring_data = request.get("monitoring_data", {})
+    conversation_history = request.get("conversation_history", [])
+    controller_id = request.get("controller_id")
+
+    if not controller_id:
+        if DB_PATH:
+            import sqlite3
+            conn = sqlite3.connect(str(DB_PATH))
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM controllers LIMIT 1")
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                controller_id = row[0]
+
+    if report_type == "claim":
+        docx_bytes = report_gen.generate_claim_act(
+            monitoring_data, conversation_history, {"contact_person": "Сервисный инженер"}
+        )
+        filename = f"Акт_Заявка_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    elif report_type == "work_order":
+        docx_bytes = report_gen.generate_work_order(monitoring_data)
+        filename = f"Заказ_наряд_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    elif report_type == "service":
+        docx_bytes = report_gen.generate_claim_act(monitoring_data, conversation_history, {})
+        filename = f"Акт_обслуживания_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    else:
+        raise HTTPException(status_code=400, detail="Unknown report type")
+
+    return StreamingResponse(
+        docx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 # Вспомогательные функции для экспорта
 
@@ -1487,9 +1529,10 @@ async def llm_ask(request: dict):
         else:
             result = llm_agent.ask(question)
 
+        answer_cleaned = result["answer"].replace('<br>', '\n').replace('<br/>', '\n')
         return {
             "success": True,
-            "answer": result["answer"],
+            "answer": answer_cleaned,
             "sources": result.get("sources", []),
             "question": question
         }

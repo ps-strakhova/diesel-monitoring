@@ -75,7 +75,8 @@ class DieselMonitoring {
         this.adjustNotificationsHeight();
 
         await this.initLLM();
-
+        this.initDropdowns();
+        
         setInterval(() => this.loadCurrentAlerts(), 5000);
         setInterval(() => {
             if (this.currentTab === 'status') {
@@ -1774,33 +1775,7 @@ class DieselMonitoring {
         if (orderBtn) orderBtn.onclick = () => window.open('https://www.comd.ru', '_blank');
     }
 
-    async generateServiceAct() {
-        try {
-            const displayName = await this.getControllerDisplayName(this.currentControllerId);
-            const mskNow = this.getMskTime();
 
-            const content = `АКТ СЕРВИСНОГО ОБСЛУЖИВАНИЯ
-Дата: ${mskNow.toLocaleDateString('ru-RU')}
-Время: ${mskNow.toLocaleTimeString('ru-RU')}
-Установка: ${displayName}
-
----
-Сгенерировано системой мониторинга ДГУ
-`;
-            const blob = new Blob([content], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `service_act_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}_${mskNow.toISOString().slice(0,10)}.txt`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        } catch (error) {
-            console.error('Ошибка:', error);
-            alert('Не удалось сгенерировать акт');
-        }
-    }
 
 async sendMessage() {
         const input = document.getElementById('chat-input');
@@ -1928,6 +1903,104 @@ async sendMessage() {
         }
 
         return lines.join('<br>');
+    }
+
+    // Получение истории диалога
+    getConversationHistory() {
+        const container = document.getElementById('chat-messages');
+        if (!container) return [];
+
+        const messages = [];
+        const messageDivs = container.querySelectorAll('.chat-message');
+
+        messageDivs.forEach(div => {
+            const isUser = div.classList.contains('bg-diesel-blue');
+            const text = div.innerText || div.textContent;
+
+            if (text.includes('Агент думает') || text.includes('готов отвечать')) {
+                return;
+            }
+
+            messages.push({
+                role: isUser ? 'user' : 'assistant',
+                text: text
+            });
+        });
+
+        return messages;
+    }
+
+    // Генерация акта
+    async generateServiceAct(type = 'service') {
+        try {
+            const displayName = await this.getControllerDisplayName(this.currentControllerId);
+
+            const monitoringData = await this.getLLMMonitoringData();
+            const conversationHistory = this.getConversationHistory();
+
+            let endpoint = '/api/generate-report';
+            let fileName = '';
+
+            if (type === 'service') {
+                fileName = `Акт_обслуживания_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}.docx`;
+            } else if (type === 'claim') {
+                fileName = `Акт_Заявка_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}.docx`;
+            } else {
+                fileName = `Заказ_наряд_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}.docx`;
+            }
+
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    report_type: type,
+                    monitoring_data: monitoringData,
+                    conversation_history: conversationHistory,
+                    controller_id: this.currentControllerId
+                })
+            });
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            this.showToast(`✅ ${fileName} сформирован`, 'success');
+
+        } catch (error) {
+            console.error('Ошибка:', error);
+            this.showToast('❌ Ошибка при формировании акта', 'error');
+        }
+    }
+
+    // Инициализация выпадающего меню
+    initDropdowns() {
+        const exportBtn = document.getElementById('export-act-btn');
+        const exportMenu = document.getElementById('export-act-menu');
+
+        if (exportBtn && exportMenu) {
+            exportBtn.onclick = (e) => {
+                e.stopPropagation();
+                exportMenu.classList.toggle('hidden');
+            };
+
+            document.addEventListener('click', () => {
+                exportMenu.classList.add('hidden');
+            });
+        }
+
+        const serviceBtn = document.getElementById('export-act-service');
+        const claimBtn = document.getElementById('export-act-claim');
+        const workBtn = document.getElementById('export-work-order');
+
+        if (serviceBtn) serviceBtn.onclick = () => this.generateServiceAct('service');
+        if (claimBtn) claimBtn.onclick = () => this.generateServiceAct('claim');
+        if (workBtn) workBtn.onclick = () => this.generateServiceAct('work_order');
     }
 
     formatLLMMessage(text) {

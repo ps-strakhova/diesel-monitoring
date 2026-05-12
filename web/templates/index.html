@@ -218,15 +218,22 @@
                 <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
                     <div class="bg-gray-50 px-5 py-3 border-b border-gray-200 flex justify-between items-center">
                         <h2 class="font-semibold text-diesel-blue">🤖 AI Помощник</h2>
-                        <button id="export-act" class="btn-secondary text-white text-xs font-medium px-3 py-1.5 rounded-lg transition flex items-center gap-1">
-                            📄 Акт в сервис
-                        </button>
+                        <div class="relative">
+                            <button id="export-act-btn" class="btn-secondary text-white text-xs font-medium px-3 py-1.5 rounded-lg transition flex items-center gap-1">
+                                📄 Скачать акт ▼
+                            </button>
+                            <div id="export-act-menu" class="dropdown-menu hidden">
+                                <button id="export-act-service">📄 Акт обслуживания</button>
+                                <button id="export-act-claim">📋 Акт-заявка</button>
+                                <button id="export-work-order">📝 Заказ-наряд</button>
+                            </div>
+                        </div>
                     </div>
                     <div class="p-3">
-                        <div id="chat-messages" class="h-32 overflow-y-auto mb-2 space-y-1.5 bg-gray-50 rounded-lg p-2 text-xs"></div>
+                        <div id="chat-messages" class="overflow-y-auto mb-2 space-y-1.5 bg-gray-50 rounded-lg p-2 text-xs"></div>
                         <div class="flex gap-1.5">
                             <input type="text" id="chat-input" placeholder="Задайте вопрос..."
-                                   class="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:ring-1 focus:ring-diesel-orange focus:border-diesel-orange">
+                                   class="flex-1 border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:ring-1 focus:ring-diesel-orange">
                             <button id="send-message" class="btn-primary px-3 py-1.5 rounded-lg transition text-xs font-medium">
                                 Отправить
                             </button>
