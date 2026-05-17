@@ -161,6 +161,7 @@ class DieselMonitor:
         self.cmd = None
         self.rules = None
         self.ya = None
+        self.db_path = DB_PATH
 
         self.controller_id = None
         self.value_map: Dict[int, int] = {}
@@ -1016,7 +1017,7 @@ class DieselMonitor:
                         self.conn, self.controller_id,
                         "alarm",
                         f"Режим записи изменен: АВАРИЙНЫЙ РЕЖИМ",
-                        details=f"Причины: {', '.join(alarm_reasons[:3])}\n\n{snapshot}",
+                        details=f"Причины: {', '.join(alarm_reasons[:3])}\n",
                         code="RECORDING_MODE_CHANGED",
                         filter_passed=1,
                         snapshot=snapshot
