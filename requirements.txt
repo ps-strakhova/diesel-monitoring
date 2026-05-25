@@ -41,3 +41,6 @@ python-docx==1.1.2
 openpyxl==3.1.5
 pillow==10.4.0
 pytesseract==0.3.13
+
+pip install pymodbus==3.7.4
+pip install PyPDF2
