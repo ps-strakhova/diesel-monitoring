@@ -34,16 +34,39 @@
     <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div class="container mx-auto px-4 py-3 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <div class="h-10 w-15 bg-diesel-blue rounded-lg flex items-center justify-center text-white font-bold text-xl"><img src="/static/images/logo.png" alt="КД" class="h-full w-full object-cover"></div>
+                <div class="h-10 w-15 bg-diesel-blue rounded-lg flex items-center justify-center text-white font-bold text-xl">
+                    <img src="/static/images/logo.png" alt="КД" class="h-full w-full object-cover">
+                </div>
                 <span class="font-light text-[30px] text-gray-200">МОНИТОРИНГ</span>
             </div>
-            <a href="https://www.comd.ru" target="_blank" rel="noopener noreferrer"
-               class="flex items-center gap-2 text-diesel-orange hover:text-diesel-blue transition-colors duration-200 text-sm font-medium bg-orange-50 hover:bg-blue-50 px-4 py-2 rounded-full">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                </svg>
-                <span>Главный сайт</span>
-            </a>
+
+            <div class="flex items-center gap-4">
+                <!-- Информация о пользователе -->
+                <div class="flex items-center gap-2 text-sm">
+                    <span class="text-gray-400">👤</span>
+                    <span class="text-gray-600 font-medium">{{ user.username if user else 'Гость' }}</span>
+                    {% if user and user.is_admin %}
+                    <span class="text-xs bg-diesel-blue/10 text-diesel-blue px-2 py-0.5 rounded-full">Админ</span>
+                    {% endif %}
+                </div>
+
+                <!-- Кнопка выхода -->
+                <a href="/logout"
+                   class="text-gray-400 hover:text-red-500 transition-colors duration-200 text-sm font-medium hover:bg-red-50 px-3 py-1.5 rounded-full flex items-center gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    Выйти
+                </a>
+
+                <a href="https://www.comd.ru" target="_blank" rel="noopener noreferrer"
+                   class="flex items-center gap-2 text-diesel-orange hover:text-diesel-blue transition-colors duration-200 text-sm font-medium bg-orange-50 hover:bg-blue-50 px-4 py-2 rounded-full">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    <span>Главный сайт</span>
+                </a>
+            </div>
         </div>
     </header>
 

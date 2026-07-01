@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Вход - Дизель Мониторинг</title>
+
+    <!-- Шрифт -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'diesel-blue': '#002f87',
+                        'diesel-orange': '#ec6d22'
+                    },
+                    fontFamily: {
+                        'sans': ['Inter', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="/static/css/login.css">
+</head>
+<body class="login-page">
+
+    <div class="login-card">
+        <!-- Логотип -->
+        <div class="login-logo">
+            <div class="login-logo-icon">
+                <img src="/static/images/logo1.png" alt="КД" class="h-full w-full object-cover">
+            </div>
+            <div>
+                <div class="login-logo-text">МОНИТОРИНГ</div>
+                <div class="login-logo-sub">Система контроля ДГУ</div>
+            </div>
+        </div>
+
+        <!-- Заголовок -->
+        <h2 class="login-title">Добро пожаловать</h2>
+        <p class="login-subtitle">Войдите в систему мониторинга</p>
+
+        <!-- Ошибка -->
+        {% if error %}
+        <div class="login-error">{{ error }}</div>
+        {% endif %}
+
+        <!-- Форма входа -->
+        <form method="post" action="/login" class="login-form">
+            <div class="form-group">
+                <label class="form-label">👤 Имя пользователя</label>
+                <input type="text" name="username" class="form-input" placeholder="Введите логин" required autofocus>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">🔒 Пароль</label>
+                <input type="password" name="password" class="form-input" placeholder="Введите пароль" required>
+            </div>
+
+            <button type="submit" class="login-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" />
+                </svg>
+                Войти в систему
+            </button>
+        </form>
+
+        <!-- Футер -->
+        <div class="login-footer">
+            <span class="login-status-badge">● Активна</span>
+            <span style="margin-left: 8px;">v2.0</span>
+        </div>
+        <div class="login-version">
+            © {{ now.year if now else 2026 }} Компания Дизель
+        </div>
+    </div>
+
+</body>
+</html>
