@@ -34,15 +34,15 @@
     <header class="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div class="container mx-auto px-4 py-3 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <div class="h-10 w-10 bg-diesel-blue rounded-lg flex items-center justify-center text-white font-bold text-xl">Д</div>
-                <span class="font-bold text-xl text-diesel-blue">ДИЗЕЛЬ <span class="font-light text-gray-500">МОНИТОРИНГ</span></span>
+                <div class="h-10 w-15 bg-diesel-blue rounded-lg flex items-center justify-center text-white font-bold text-xl"><img src="/static/images/logo.png" alt="КД" class="h-full w-full object-cover"></div>
+                <span class="font-light text-[30px] text-gray-200">МОНИТОРИНГ</span>
             </div>
             <a href="https://www.comd.ru" target="_blank" rel="noopener noreferrer"
                class="flex items-center gap-2 text-diesel-orange hover:text-diesel-blue transition-colors duration-200 text-sm font-medium bg-orange-50 hover:bg-blue-50 px-4 py-2 rounded-full">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                 </svg>
-                <span>Выйти</span>
+                <span>Главный сайт</span>
             </a>
         </div>
     </header>
@@ -178,7 +178,7 @@
                                 <option value="oil_pressure">⚙️ Давление масла</option>
                                 <option value="fuel">⛽ Уровень топлива</option>
                                 <option value="battery">🔋 Напряжение АКБ</option>
-                                <option value="frequency">📡 Частота сети</option>
+                                <option value="f_gen">⚡️ Частота генератора</option>
                                 <option value="RPM">🔄 Обороты</option>
                             </select>
                             <select id="chart-period-select" class="text-xs border border-gray-300 rounded-lg px-2 py-1.5 bg-white focus:ring-1 focus:ring-diesel-orange">
@@ -223,7 +223,7 @@
                                 📄 Скачать акт ▼
                             </button>
                             <div id="export-act-menu" class="dropdown-menu hidden">
-                                <button id="export-act-service">📄 Акт обслуживания</button>
+                                <button id="export-act-service">📄 Акт-диагностики</button>
                                 <button id="export-act-claim">📋 Акт-заявка</button>
                                 <button id="export-work-order">📝 Заказ-наряд</button>
                             </div>

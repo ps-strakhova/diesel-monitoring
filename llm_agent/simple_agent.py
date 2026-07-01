@@ -5,10 +5,14 @@ LLM Агент для работы с документацией ДГУ
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
+import time
+import logging
+import re
+import hashlib
+import shutil
 
 # Загрузка переменных окружения
 from dotenv import load_dotenv
@@ -28,58 +32,87 @@ import pytesseract
 # Эмбеддинги и поиск
 from sentence_transformers import SentenceTransformer
 import chromadb
+from chromadb.config import Settings
 
 # HTTP запросы
 import requests
+from bs4 import BeautifulSoup
 
 # ============================================================
-# 2. НАСТРОЙКИ
+# 2. НАСТРОЙКИ И ЛОГИРОВАНИЕ
 # ============================================================
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).parent
 DOCS_DIR = BASE_DIR / "documents"
 CHROMA_DIR = BASE_DIR / "chroma_storage"
 
-# Создаём папки
 DOCS_DIR.mkdir(exist_ok=True)
 CHROMA_DIR.mkdir(exist_ok=True)
 
-# Языки для OCR (русский, английский, чешский, немецкий)
 OCR_LANGUAGES = "rus+eng+ces+deu"
-
-# Путь к Tesseract (для Windows - раскомментировать и указать свой путь)
-# pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-
-# API Yandex GPT
 YANDEX_API_KEY_LLM = os.getenv("YANDEX_API_KEY_LLM")
 YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID")
 
 # ============================================================
-# 3. ИЗВЛЕЧЕНИЕ ТЕКСТА ИЗ ДОКУМЕНТОВ
+# 3. ОЧИСТКА ТЕКСТА
+# ============================================================
+
+def sanitize_text(text: str) -> str:
+    if not text:
+        return ""
+    soup = BeautifulSoup(text, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    text = soup.get_text(separator="\n")
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def clean_llm_output(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?p>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'</?div>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'&nbsp;', ' ', text)
+    text = re.sub(r'&lt;', '<', text)
+    text = re.sub(r'&gt;', '>', text)
+    text = re.sub(r'&amp;', '&', text)
+    text = re.sub(r'&quot;', '"', text)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    return '\n'.join(lines)
+
+
+# ============================================================
+# 4. ИЗВЛЕЧЕНИЕ ТЕКСТА ИЗ ДОКУМЕНТОВ
 # ============================================================
 
 def extract_text_from_pdf(file_path: str) -> str:
-    """Извлечение текста из PDF (с поддержкой скан-копий)"""
     text_parts = []
-
-    # Пробуем PyMuPDF (лучше справляется)
     try:
-        import fitz  # PyMuPDF
+        import fitz
         doc = fitz.open(file_path)
         for page_num, page in enumerate(doc):
             text = page.get_text()
             if text and text.strip():
                 text_parts.append(f"--- СТРАНИЦА {page_num + 1} ---\n{text}")
         doc.close()
-
         if text_parts:
             return "\n".join(text_parts)
     except ImportError:
         pass
     except Exception as e:
-        print(f"  PyMuPDF error: {e}")
+        logger.warning(f"PyMuPDF error: {e}")
 
-    # Fallback на PyPDF2
     try:
         with open(file_path, 'rb') as f:
             reader = PyPDF2.PdfReader(f)
@@ -88,53 +121,37 @@ def extract_text_from_pdf(file_path: str) -> str:
                 if text and text.strip():
                     text_parts.append(f"--- СТРАНИЦА {page_num + 1} ---\n{text}")
     except Exception as e:
-        print(f"  PyPDF2 error: {e}")
+        logger.warning(f"PyPDF2 error: {e}")
 
     return "\n".join(text_parts)
 
 
 def extract_text_from_docx(file_path: str) -> str:
-    """Извлечение текста из DOCX, включая таблицы"""
     text_parts = []
     try:
         doc = docx.Document(file_path)
-
-        # Обычные параграфы
         for para in doc.paragraphs:
             if para.text.strip():
                 text_parts.append(para.text)
-
-        # Таблицы
         for table_idx, table in enumerate(doc.tables):
             text_parts.append(f"\n[ТАБЛИЦА {table_idx + 1}]")
             for row in table.rows:
-                row_text = []
-                for cell in row.cells:
-                    cell_text = cell.text.strip()
-                    if cell_text:
-                        row_text.append(cell_text)
+                row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
                 if row_text:
                     text_parts.append(" | ".join(row_text))
-
     except Exception as e:
-        print(f"  DOCX error: {e}")
+        logger.warning(f"DOCX error: {e}")
     return "\n".join(text_parts)
 
 
-# ДОБАВЬТЕ ЭТУ НОВУЮ ФУНКЦИЮ
 def extract_text_from_doc(file_path: str) -> str:
-    """Извлечение текста из старого .doc файла"""
     text_parts = []
     try:
-        # Пробуем прочитать как бинарный файл и извлечь текст
         with open(file_path, 'rb') as f:
             content = f.read()
-            # Пробуем разные кодировки
             for encoding in ['cp1251', 'utf-8', 'latin-1', 'cp1250']:
                 try:
                     text = content.decode(encoding, errors='ignore')
-                    # Очищаем от нечитаемых символов
-                    import re
                     text = re.sub(r'[^\w\s\.,;:!?\-\(\)\n\r%°СВ]', ' ', text)
                     text = re.sub(r'\s+', ' ', text)
                     if text.strip():
@@ -143,24 +160,23 @@ def extract_text_from_doc(file_path: str) -> str:
                 except:
                     continue
     except Exception as e:
-        print(f"  DOC error: {e}")
+        logger.warning(f"DOC error: {e}")
 
     if not text_parts:
-        # Если не получилось, пробуем через textract (если установлен)
         try:
             import textract
             text = textract.process(file_path).decode('utf-8')
             if text.strip():
                 text_parts.append(text)
         except ImportError:
-            print("  ⚠️ Для чтения .doc файлов установите: pip install textract")
+            pass
         except Exception as e:
-            print(f"  textract error: {e}")
+            logger.warning(f"textract error: {e}")
 
     return "\n".join(text_parts)
 
+
 def extract_text_from_txt(file_path: str) -> str:
-    """Извлечение текста из TXT с автоопределением кодировки"""
     encodings = ['utf-8', 'cp1251', 'latin-1', 'cp1250', 'koi8-r']
     for encoding in encodings:
         try:
@@ -172,7 +188,6 @@ def extract_text_from_txt(file_path: str) -> str:
 
 
 def extract_text_from_excel(file_path: str) -> str:
-    """Извлечение данных из Excel (XLSX) с сохранением структуры"""
     try:
         workbook = openpyxl.load_workbook(file_path, data_only=True)
         all_sheets_text = []
@@ -180,8 +195,6 @@ def extract_text_from_excel(file_path: str) -> str:
         for sheet_name in workbook.sheetnames:
             sheet = workbook[sheet_name]
             sheet_text = [f"\n📊 ЛИСТ: {sheet_name}\n{'-' * 40}"]
-
-            # Собираем все строки с данными
             rows_data = []
             for row in sheet.iter_rows(values_only=True):
                 row_values = [str(cell) if cell is not None else "" for cell in row]
@@ -193,27 +206,20 @@ def extract_text_from_excel(file_path: str) -> str:
                 all_sheets_text.append("\n".join(sheet_text))
                 continue
 
-            # Определяем заголовки (первая строка)
             headers = rows_data[0] if rows_data else []
-
-            # Если заголовков нет - создаём
             if not headers or all(not h.strip() for h in headers):
                 headers = [f"Колонка_{i+1}" for i in range(len(rows_data[0]))]
                 start_row = 0
             else:
                 start_row = 1
 
-            # Формируем Markdown-таблицу
             if headers:
                 sheet_text.append("| " + " | ".join(headers) + " |")
                 sheet_text.append("|" + "|".join(["---" for _ in headers]) + "|")
-
                 for row in rows_data[start_row:]:
-                    # Выравниваем строку по количеству колонок
                     padded_row = row + [""] * (len(headers) - len(row))
                     sheet_text.append("| " + " | ".join(padded_row[:len(headers)]) + " |")
 
-            # Дополнительно: формат ключ-значение для лучшего понимания
             sheet_text.append("\n📋 ДАННЫЕ (ключ-значение):")
             for row_idx, row in enumerate(rows_data[start_row:], 1):
                 row_parts = []
@@ -229,15 +235,13 @@ def extract_text_from_excel(file_path: str) -> str:
         return "\n\n".join(all_sheets_text)
 
     except Exception as e:
-        print(f"  Excel error: {e}")
+        logger.warning(f"Excel error: {e}")
         return ""
 
 
 def extract_text_from_image(file_path: str) -> str:
-    """Извлечение текста из изображения через OCR"""
     try:
         image = Image.open(file_path)
-        # Увеличиваем размер для лучшего распознавания
         if image.width < 1000:
             scale = 2000 / image.width
             new_size = (int(image.width * scale), int(image.height * scale))
@@ -246,36 +250,48 @@ def extract_text_from_image(file_path: str) -> str:
         text = pytesseract.image_to_string(image, lang=OCR_LANGUAGES)
         return text.strip() if text.strip() else ""
     except Exception as e:
-        print(f"  Image OCR error: {e}")
+        logger.warning(f"Image OCR error: {e}")
         return ""
 
+def generate_chunk_id(
+    filename,
+    chunk_number,
+    chunk_text
+):
+
+    data = (
+        filename
+        + str(chunk_number)
+        + chunk_text[:500]
+    )
+
+    return hashlib.md5(
+        data.encode("utf-8")
+    ).hexdigest()
 
 def load_all_documents() -> List[Dict]:
-    """Загрузка всех документов из папки documents/"""
     documents = []
+    logger.info(f"Сканируем папку: {DOCS_DIR}")
 
-    print(f"\n📁 Сканируем папку: {DOCS_DIR}")
-
-    # Поддерживаемые форматы
     supported_extensions = ['.pdf', '.docx', '.doc', '.txt', '.xlsx', '.xlsm', '.png', '.jpg', '.jpeg', '.bmp', '.tiff']
+
     for file_path in DOCS_DIR.iterdir():
         if not file_path.is_file():
             continue
 
         ext = file_path.suffix.lower()
         if ext not in supported_extensions:
-            print(f"\n⚠️ Неподдерживаемый формат: {file_path.name} ({ext})")
+            logger.warning(f"Неподдерживаемый формат: {file_path.name}")
             continue
 
-        print(f"\n📄 Обработка: {file_path.name}")
+        logger.info(f"Обработка: {file_path.name}")
 
-        # Выбираем функцию извлечения в зависимости от расширения
         if ext == '.pdf':
             text = extract_text_from_pdf(str(file_path))
         elif ext == '.docx':
             text = extract_text_from_docx(str(file_path))
         elif ext == '.doc':
-            text = extract_text_from_doc(str(file_path))  # <- И ЭТУ
+            text = extract_text_from_doc(str(file_path))
         elif ext == '.txt':
             text = extract_text_from_txt(str(file_path))
         elif ext in ['.xlsx', '.xlsm']:
@@ -285,8 +301,9 @@ def load_all_documents() -> List[Dict]:
         else:
             continue
 
+        text = sanitize_text(text)
+
         if text and text.strip():
-            # Разбиваем на чанки (для таблиц увеличил размер)
             chunk_size = 2000
             overlap = 300
             chunks = []
@@ -297,7 +314,7 @@ def load_all_documents() -> List[Dict]:
 
             for i, chunk in enumerate(chunks):
                 documents.append({
-                    "id": f"{file_path.name}_{i}",
+                    "id": generate_chunk_id(file_path.name,i,chunk),
                     "text": chunk,
                     "metadata": {
                         "source": file_path.name,
@@ -307,119 +324,166 @@ def load_all_documents() -> List[Dict]:
                         "processed_at": datetime.now().isoformat()
                     }
                 })
-            print(f"  ✅ Загружено: {len(chunks)} фрагментов")
+            logger.info(f"  ✅ Загружено: {len(chunks)} фрагментов")
         else:
-            print(f"  ⚠️ Текст не извлечён (файл пуст или нечитаем)")
+            logger.warning(f"  ⚠️ Текст не извлечён")
 
     return documents
 
 
 # ============================================================
-# 4. ВЕКТОРНОЕ ХРАНИЛИЩЕ (ЭМБЕДДИНГИ)
+# 5. ВЕКТОРНОЕ ХРАНИЛИЩЕ (СОХРАНЕНИЕ МЕЖДУ ЗАПУСКАМИ)
 # ============================================================
 
 class VectorStore:
-    """Хранилище эмбеддингов на базе ChromaDB"""
+    COLLECTION_NAME = "diesel_docs"
 
     def __init__(self):
-        print("\n🔄 Инициализация векторного хранилища...")
+        logger.info("Инициализация VectorStore")
 
-        # Загружаем модель эмбеддингов
-        print("  - Загрузка модели эмбеддингов (первый раз может занять минуту)...")
-        self.embedding_model = SentenceTransformer('intfloat/multilingual-e5-small')
-
-        # Создаём клиент ChromaDB
-        print("  - Подключение к ChromaDB...")
-        self.client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-
-        # Получаем или создаём коллекцию
-        self.collection = self.client.get_or_create_collection(
-            name="diesel_docs"
+        self.embedding_model = SentenceTransformer(
+            "intfloat/multilingual-e5-small"
         )
 
-        print(f"  ✅ Готово. В коллекции: {self.collection.count()} фрагментов")
+        self.embedding_model.max_seq_length = 512
 
-    def _get_embeddings(self, texts: List[str]) -> List[List[float]]:
-        """Получение эмбеддингов для текстов"""
-        return self.embedding_model.encode(texts, convert_to_numpy=True).tolist()
+        self.client = chromadb.PersistentClient(
+            path=str(CHROMA_DIR),
+            settings=Settings(
+                anonymized_telemetry=False,
+                allow_reset=True
+            )
+        )
 
-    def index_documents(self, documents: List[Dict]):
-        """Индексация документов в ChromaDB с пакетной обработкой"""
-        if not documents:
-            print("⚠️ Нет документов для индексации")
+        self.collection = self.client.get_or_create_collection(
+            name=self.COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"}
+        )
+
+        logger.info(
+            f"Коллекция открыта. Чанков: {self.collection.count()}"
+        )
+
+        self._validate_collection()
+
+    def _validate_collection(self):
+        """
+        Проверка индекса после старта.
+        Если индекс битый — пересоздаем.
+        """
+
+        count = self.collection.count()
+
+        if count == 0:
             return
 
-        print(f"\n🔄 Индексация {len(documents)} фрагментов...")
+        try:
+            dummy = [0.0] * 384
 
-        # Разбиваем на пакеты по 500 (безопасный размер)
-        BATCH_SIZE = 500
-        total_batches = (len(documents) + BATCH_SIZE - 1) // BATCH_SIZE
-
-        for batch_num in range(total_batches):
-            batch_start = batch_num * BATCH_SIZE
-            batch_end = min(batch_start + BATCH_SIZE, len(documents))
-            batch = documents[batch_start:batch_end]
-
-            print(f"  - Пакет {batch_num + 1}/{total_batches} ({len(batch)} фрагментов)")
-
-            # Подготавливаем данные
-            ids = [doc["id"] for doc in batch]
-            texts = [doc["text"] for doc in batch]
-            metadatas = [doc["metadata"] for doc in batch]
-
-            # Получаем эмбеддинги
-            print("    - Вычисление эмбеддингов...")
-            embeddings = self._get_embeddings(texts)
-
-            # Сохраняем в ChromaDB
-            print("    - Сохранение в базу...")
-            self.collection.add(
-                ids=ids,
-                documents=texts,
-                metadatas=metadatas,
-                embeddings=embeddings
+            self.collection.query(
+                query_embeddings=[dummy],
+                n_results=1
             )
 
-        print(f"  ✅ Индексация завершена. Всего: {self.collection.count()}")
+            logger.info("Индекс успешно проверен")
 
-    def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Поиск релевантных фрагментов"""
-        # Получаем эмбеддинг запроса
-        query_embedding = self._get_embeddings([query])[0]
+        except Exception as e:
+            logger.error(
+                f"Коллекция повреждена: {e}"
+            )
 
-        # Поиск в ChromaDB
+            raise RuntimeError(
+                "Поврежден индекс Chroma"
+            )
+
+    def embed_documents(self, texts):
+        prefixed = [
+            f"passage: {t}"
+            for t in texts
+        ]
+
+        return self.embedding_model.encode(
+            prefixed,
+            normalize_embeddings=True,
+            convert_to_numpy=True
+        ).tolist()
+
+    def embed_query(self, query):
+        return self.embedding_model.encode(
+            [f"query: {query}"],
+            normalize_embeddings=True,
+            convert_to_numpy=True
+        ).tolist()
+
+    def index_documents(self, documents):
+
+        batch_size = 200
+
+        for start in range(
+                0,
+                len(documents),
+                batch_size
+        ):
+            batch = documents[
+                    start:start + batch_size
+                    ]
+
+            ids = [d["id"] for d in batch]
+            texts = [d["text"] for d in batch]
+            metas = [d["metadata"] for d in batch]
+
+            embeddings = self.embed_documents(texts)
+
+            try:
+                self.collection.upsert(
+                    ids=ids,
+                    documents=texts,
+                    metadatas=metas,
+                    embeddings=embeddings
+                )
+            except Exception as e:
+                logger.error(f"Ошибка индексации: {e}")
+
+            logger.info(
+                f"Добавлено {len(ids)} чанков"
+            )
+
+    def search(self, query, top_k=5):
+
+        query_embedding = self.embed_query(query)
+
         results = self.collection.query(
-            query_embeddings=[query_embedding],
+            query_embeddings=query_embedding,
             n_results=top_k
         )
 
-        # Форматируем результаты
-        documents = []
-        if results['documents'] and results['documents'][0]:
-            for i, doc in enumerate(results['documents'][0]):
-                documents.append({
-                    "text": doc,
-                    "metadata": results['metadatas'][0][i] if results['metadatas'] else {},
-                    "distance": results['distances'][0][i] if results['distances'] else None
-                })
+        output = []
 
-        return documents
+        docs = results.get("documents", [[]])[0]
+        metas = results.get("metadatas", [[]])[0]
+        dists = results.get("distances", [[]])[0]
 
-    def get_stats(self) -> dict:
-        """Получить статистику хранилища"""
+        for i in range(len(docs)):
+            output.append({
+                "text": docs[i],
+                "metadata": metas[i],
+                "distance": dists[i]
+            })
+
+        return output
+
+    def get_stats(self):
         return {
-            "total_chunks": self.collection.count(),
-            "collection_name": "diesel_docs"
+            "collection_name": self.COLLECTION_NAME,
+            "total_chunks": self.collection.count()
         }
 
 
 # ============================================================
-# 5. YANDEX GPT (ГЕНЕРАЦИЯ ОТВЕТОВ)
+# 6. YANDEX GPT
 # ============================================================
 
 class YandexGPT:
-    """Клиент для Yandex GPT API"""
-
     def __init__(self):
         self.api_key = YANDEX_API_KEY_LLM
         self.folder_id = YANDEX_FOLDER_ID
@@ -427,31 +491,33 @@ class YandexGPT:
 
         self.system_prompt = """Ты технический эксперт по дизельным генераторным установкам (ДГУ).
 
-        ПРАВИЛА:
-        1. Отвечай ТОЛЬКО на русском языке.
-        2. Используй ТОЛЬКО информацию из предоставленной документации.
-        3. Если в документации нет ответа - скажи "В документации нет информации об этом".
-        4. Если вопрос не по теме ДГУ - вежливо откажись отвечать.
-        5. Будь конкретным и профессиональным.
-        6. Если есть таблица с нормами - используй её данные.
-        7. При опасных ситуациях - предупреди пользователя.
+ПРАВИЛА ОТВЕТОВ:
+1. Отвечай ТОЛЬКО на русском языке.
+2. Используй ТОЛЬКО информацию из предоставленной документации.
+3. Если в документации нет ответа - скажи "В документации нет информации об этом".
+4. Если вопрос не по теме ДГУ - вежливо откажись отвечать.
+5. Будь конкретным и профессиональным.
+6. Если есть таблица с нормами - используй её данные.
+7. При опасных ситуациях - предупреди пользователя.
 
-        ВАЖНОЕ ПРАВИЛО ФОРМАТИРОВАНИЯ:
-        - НЕ ИСПОЛЬЗУЙ HTML-теги (например, <br>, <p>, <div>).
-        - Для переноса строк используй только символ перевода строки (два подряд \n\n для абзацев).
-        - Для списков используй дефис или звёздочку в начале строки.
-        - Не добавляй лишних пробелов в начале строк.
+ФОРМАТИРОВАНИЕ ОТВЕТОВ (ОБЯЗАТЕЛЬНО):
+- НЕ ИСПОЛЬЗУЙ HTML-теги (например, <br>, <p>, <div>).
+- НЕ ИСПОЛЬЗУЙ Markdown (**, *, #).
+- Для переноса строк используй ТОЛЬКО символы перевода строки (два \n\n для абзацев).
+- Для списков используй дефис или звёздочку в начале строки.
+- Не добавляй лишних пробелов в начале строк.
 
-        Пример правильного ответа:
-        **Температура ОЖ 93°C** – это выше нормы.
-        Возможные причины:
-        - Неисправность термостата
-        - Засорение радиатора
-        Рекомендуется проверить уровень антифриза."""
+Пример правильного ответа:
+Температура охлаждающей жидкости 93°C - это выше нормы.
+
+Возможные причины:
+- Неисправность термостата
+- Засорение радиатора
+- Низкий уровень антифриза
+
+Рекомендуется проверить уровень антифриза и работу термостата."""
 
     def ask(self, question: str, context: str) -> str:
-        """Задать вопрос с контекстом из документов"""
-
         prompt = f"""
 ДОКУМЕНТАЦИЯ:
 {context}
@@ -459,9 +525,8 @@ class YandexGPT:
 ВОПРОС ПОЛЬЗОВАТЕЛЯ:
 {question}
 
-ОТВЕТ (на русском языке):
+ОТВЕТ (на русском языке, без HTML-тегов, без Markdown):
 """
-
         url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         headers = {
             "Authorization": f"Api-Key {self.api_key}",
@@ -484,15 +549,13 @@ class YandexGPT:
             response.raise_for_status()
             result = response.json()
             answer = result["result"]["alternatives"][0]["message"]["text"]
-            # Убираем HTML-теги переноса строки (модель иногда их генерирует)
-            answer = answer.replace('<br>', '\n').replace('<br/>', '\n')
+            answer = clean_llm_output(answer)
             return answer
         except Exception as e:
-            print(f"❌ Ошибка Yandex GPT: {e}")
+            logger.error(f"Ошибка Yandex GPT: {e}")
             return f"Извините, произошла ошибка при обращении к модели: {e}"
 
     def check_connection(self) -> bool:
-        """Проверка подключения к API"""
         try:
             self.ask("Тест", "Тестовый контекст")
             return True
@@ -501,54 +564,62 @@ class YandexGPT:
 
 
 # ============================================================
-# 6. ОСНОВНОЙ КЛАСС АГЕНТА
+# 7. ОСНОВНОЙ КЛАСС АГЕНТА (ТОЛЬКО LLM)
 # ============================================================
 
 class DieselLLMAgent:
-    """LLM агент для работы с документацией ДГУ"""
-
     def __init__(self, auto_index: bool = True):
-        print("\n" + "="*60)
-        print("🚀 ЗАПУСК LLM АГЕНТА ДЛЯ ДГУ")
-        print("="*60)
+        logger.info("="*60)
+        logger.info("🚀 ЗАПУСК LLM АГЕНТА ДЛЯ ДГУ")
+        logger.info("="*60)
 
-        # Инициализация компонентов
-        self.vector_store = VectorStore()
-        self.llm = YandexGPT()
+        self.vector_store = None
+        self.llm = None
+        self.is_initialized = False
 
-        # Загружаем документы (только если нужно и если есть новые)
+        try:
+            self.vector_store = VectorStore()
+            self.llm = YandexGPT()
+            self.is_initialized = True
+        except Exception as e:
+            logger.error(f"Ошибка инициализации: {e}")
+            logger.warning("⚠️ Агент будет работать в ограниченном режиме (без поиска)")
+
         self.document_stats = {"total_docs": 0, "sources": []}
 
-        if auto_index:
+        if auto_index and self.is_initialized:
             self._initialize_documents()
 
-        print("\n✅ АГЕНТ ГОТОВ К РАБОТЕ!")
-        print("="*60)
+        logger.info("✅ АГЕНТ ГОТОВ К РАБОТЕ!")
+        logger.info("="*60)
 
     def _initialize_documents(self):
-        """Загрузка и индексация документов (только если нет в базе)"""
-
-        # Проверяем, есть ли уже документы
-        if self.vector_store.collection.count() > 0:
-            print(f"\n📚 Документы уже загружены ({self.vector_store.collection.count()} фрагментов)")
-            self._update_stats()
+        """Загрузка или использование существующей базы"""
+        if not self.is_initialized:
             return
 
-        # Загружаем документы из папки
-        documents = load_all_documents()
-
-        if documents:
-            self.vector_store.index_documents(documents)
-            self._update_stats()
-        else:
-            print("\n⚠️ НЕТ ДОКУМЕНТОВ ДЛЯ ЗАГРУЗКИ!")
-            print(f"📁 Добавьте файлы (PDF, DOCX, XLSX, TXT, изображения) в папку: {DOCS_DIR}")
+        try:
+            count = self.vector_store.collection.count()
+            if count > 0:
+                logger.info(f"📚 Использую существующую базу ({count} фрагментов)")
+                self._update_stats()
+                return
+            else:
+                logger.info("🔄 Коллекция существует, но пуста. Загружаю документы...")
+                documents = load_all_documents()
+                if documents:
+                    self.vector_store.index_documents(documents)
+                    self._update_stats()
+                else:
+                    logger.warning("⚠️ НЕТ ДОКУМЕНТОВ ДЛЯ ЗАГРУЗКИ!")
+                    logger.info(f"📁 Добавьте файлы в папку: {DOCS_DIR}")
+        except Exception as e:
+            logger.error(f"Ошибка доступа к коллекции: {e}")
+            logger.info("💡 Попробуйте выполнить восстановление через /refresh")
 
     def _update_stats(self):
-        """Обновление статистики документов"""
         try:
-            # Получаем список уникальных источников
-            results = self.vector_store.collection.get()
+            results = self.vector_store.collection.get(include=["metadatas"])
             if results and results['metadatas']:
                 sources = set()
                 for meta in results['metadatas']:
@@ -560,27 +631,37 @@ class DieselLLMAgent:
                     "total_chunks": len(results['ids'])
                 }
         except Exception as e:
-            print(f"⚠️ Ошибка статистики: {e}")
+            logger.warning(f"Ошибка статистики: {e}")
 
     def ask(self, question: str, context_override: str = None) -> Dict:
-        """Задать вопрос агенту"""
-
-        print(f"\n❓ Вопрос: {question[:100]}..." if len(question) > 100 else f"\n❓ Вопрос: {question}")
-
-        # Поиск релевантных фрагментов
-        relevant_docs = self.vector_store.search(question, top_k=5)
-
-        if not relevant_docs:
+        if not self.is_initialized:
             return {
-                "answer": "В загруженной документации не найдено информации по вашему вопросу.\n\n💡 Совет: Убедитесь, что документы загружены в папку llm_agent/documents/",
+                "answer": "Извините, агент не инициализирован. Проверьте настройки.",
                 "sources": [],
                 "question": question
             }
 
-        # Формируем контекст
+        logger.info(f"Вопрос: {question[:100]}..." if len(question) > 100 else f"Вопрос: {question}")
+
+        try:
+            relevant_docs = self.vector_store.search(question, top_k=5)
+        except Exception as e:
+            logger.error(f"Ошибка поиска: {e}")
+            return {
+                "answer": f"Ошибка поиска в документации: {e}",
+                "sources": [],
+                "question": question
+            }
+
+        if not relevant_docs:
+            return {
+                "answer": "В загруженной документации не найдено информации по вашему вопросу.\n\n💡 Убедитесь, что документы загружены в папку llm_agent/documents/",
+                "sources": [],
+                "question": question
+            }
+
         context_parts = []
         sources = []
-
         for doc in relevant_docs:
             context_parts.append(doc["text"])
             sources.append({
@@ -589,12 +670,18 @@ class DieselLLMAgent:
             })
 
         context = "\n\n---\n\n".join(context_parts)
-
         if context_override:
             context = context_override
 
-        # Получаем ответ от LLM
-        answer = self.llm.ask(question, context)
+        try:
+            answer = self.llm.ask(question, context)
+        except Exception as e:
+            logger.error(f"Ошибка LLM: {e}")
+            return {
+                "answer": f"Ошибка при обращении к модели: {e}",
+                "sources": sources,
+                "question": question
+            }
 
         return {
             "answer": answer,
@@ -603,10 +690,17 @@ class DieselLLMAgent:
         }
 
     def ask_with_status(self, question: str, monitoring_data: Dict) -> Dict:
-        """Задать вопрос с учётом текущего состояния установки"""
+        status_keywords = [
+            'температура', 'давление', 'обороты', 'напряжение',
+            'ток', 'частота', 'уровень', 'режим', 'состояние',
+            'параметр', 'показатель', 'норма', 'отклонение',
+            'авария', 'ошибка', 'неисправность', 'проблема'
+        ]
+        question_lower = question.lower()
+        use_status = any(kw in question_lower for kw in status_keywords)
 
-        # Формируем контекст из данных мониторинга
-        status_text = f"""
+        if use_status and monitoring_data:
+            status_text = f"""
 ТЕКУЩЕЕ СОСТОЯНИЕ УСТАНОВКИ:
 - Обороты: {monitoring_data.get('rpm', 'нет данных')} об/мин
 - Температура ОЖ: {monitoring_data.get('temp', 'нет данных')}°C
@@ -620,120 +714,48 @@ class DieselLLMAgent:
 
 Вопрос: {question}
 """
-        return self.ask(status_text)
+            return self.ask(status_text)
+        else:
+            return self.ask(question)
 
     def get_stats(self) -> dict:
-        """Получить статистику агента"""
-        return {
-            "status": "ready",
-            "vector_store": self.vector_store.get_stats(),
-            "documents": self.document_stats,
-            "llm_model": "yandexgpt-lite"
-        }
+        if not self.is_initialized:
+            return {"status": "not_initialized", "error": "Агент не инициализирован"}
+        try:
+            return {
+                "status": "ready",
+                "vector_store": self.vector_store.get_stats(),
+                "documents": self.document_stats,
+                "llm_model": "yandexgpt-lite"
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     def refresh_documents(self) -> dict:
-        """Принудительное обновление документов (очистка и переиндексация)"""
-        print("\n🔄 Принудительное обновление документов...")
+        """Принудительное обновление (удаляет старую коллекцию и пересоздаёт)"""
+        if not self.is_initialized:
+            return {"status": "error", "message": "Агент не инициализирован"}
 
-        # Очищаем коллекцию
-        self.vector_store.collection.delete(where={})
+        logger.info("🔄 Принудительное обновление документов...")
 
-        # Переиндексируем
-        documents = load_all_documents()
-        if documents:
-            self.vector_store.index_documents(documents)
-            self._update_stats()
-            return {"status": "success", "documents_count": len(documents)}
-        else:
-            return {"status": "error", "message": "Нет документов для индексации"}
+        try:
+            # Удаляем старую коллекцию
+            self.vector_store.client.delete_collection("diesel_docs")
+            shutil.rmtree(CHROMA_DIR, ignore_errors=True)
+            CHROMA_DIR.mkdir(exist_ok=True)
+            # Создаём новую
+            self.vector_store = VectorStore()
+            # Индексируем документы
+            documents = load_all_documents()
+            if documents:
+                self.vector_store.index_documents(documents)
+                self._update_stats()
+                return {"status": "success", "documents_count": len(documents)}
+            else:
+                return {"status": "error", "message": "Нет документов для индексации"}
+        except Exception as e:
+            logger.error(f"Ошибка обновления: {e}")
+            return {"status": "error", "message": str(e)}
 
     def get_available_sources(self) -> List[str]:
-        """Получить список доступных источников документов"""
         return self.document_stats.get("sources", [])
-
-
-# ============================================================
-# 7. ЗАПУСК В ИНТЕРАКТИВНОМ РЕЖИМЕ (ДЛЯ ТЕСТИРОВАНИЯ)
-# ============================================================
-
-def interactive_mode():
-    """Интерактивный режим для тестирования в консоли"""
-    agent = DieselLLMAgent()
-
-    print("\n" + "="*60)
-    print("💬 ИНТЕРАКТИВНЫЙ РЕЖИМ")
-    print("Команды:")
-    print("  /status   - показать статистику")
-    print("  /sources  - показать загруженные документы")
-    print("  /refresh  - переиндексировать документы")
-    print("  /выход    - завершить работу")
-    print("="*60)
-
-    # Тестовые данные для статуса
-    test_monitoring = {
-        "rpm": 1500,
-        "temp": 83,
-        "oil": 1.1,
-        "battery": 27.3,
-        "fuel": 72,
-        "mode": "НОРМАЛЬНЫЙ",
-        "unit_name": "Тестовая ДГУ"
-    }
-
-    while True:
-        user_input = input("\n❓ Вы: ").strip()
-
-        if not user_input:
-            continue
-
-        # Обработка команд
-        if user_input.lower() in ['выход', 'exit', 'quit', '/выход']:
-            print("👋 До свидания!")
-            break
-
-        if user_input.lower() == '/status':
-            stats = agent.get_stats()
-            print(f"\n📊 СТАТИСТИКА:")
-            print(f"   Статус: {stats['status']}")
-            print(f"   Фрагментов в базе: {stats['vector_store']['total_chunks']}")
-            print(f"   Документов: {stats['documents']['total_docs']}")
-            if stats['documents']['sources']:
-                print(f"   Источники:")
-                for src in stats['documents']['sources'][:5]:
-                    print(f"     - {src}")
-            continue
-
-        if user_input.lower() == '/sources':
-            sources = agent.get_available_sources()
-            if sources:
-                print(f"\n📚 ЗАГРУЖЕННЫЕ ДОКУМЕНТЫ:")
-                for src in sources:
-                    print(f"   - {src}")
-            else:
-                print("\n📭 Нет загруженных документов")
-            continue
-
-        if user_input.lower() == '/refresh':
-            result = agent.refresh_documents()
-            if result['status'] == 'success':
-                print(f"\n✅ Документы обновлены! Загружено фрагментов: {result['documents_count']}")
-            else:
-                print(f"\n❌ Ошибка: {result.get('message', 'неизвестная ошибка')}")
-            continue
-
-        # Анализ параметров
-        if user_input.lower().startswith('/анализ') or 'параметр' in user_input.lower():
-            result = agent.ask_with_status(user_input, test_monitoring)
-        else:
-            result = agent.ask(user_input)
-
-        print(f"\n🤖 Агент: {result['answer']}")
-
-        if result.get('sources'):
-            print(f"\n📚 Источники:")
-            for src in result['sources'][:3]:
-                print(f"   - {src['source']}")
-
-
-if __name__ == "__main__":
-    interactive_mode()

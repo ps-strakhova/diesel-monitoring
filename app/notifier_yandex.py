@@ -1,9 +1,14 @@
-#notifier_yandex.py
+# app/notifier_yandex.py
+"""
+Уведомления через Яндекс Мессенджер
+"""
+
 import requests
 import time
 import re
 from threading import Lock
 from typing import Optional
+
 
 class YandexNotifier:
     def __init__(self, api_key: str, chat_id: str):
@@ -11,15 +16,31 @@ class YandexNotifier:
         self.chat_id = chat_id
         self._last_send_ts = 0
         self._lock = Lock()
-        self._message_ids: dict[str, str] = {}      # code -> message_id
-        self._code_by_msg_id: dict[str, str] = {}   # message_id -> code
+        self._message_ids: dict[str, str] = {}  # code -> message_id
+        self._code_by_msg_id: dict[str, str] = {}  # message_id -> code
 
     def enabled(self) -> bool:
         return bool(self.api_key and self.chat_id)
 
-    def send(self, message: str, reply_to_message_id: Optional[str] = None, chat_id: Optional[str] = None, skip_rate_limit: bool = False) -> Optional[str]:
+    def _api_url(self) -> str:
+        return "https://botapi.messenger.yandex.net/bot/v1/messages/sendText/"
+
+    def _headers(self) -> dict:
+        return {
+            "Authorization": f"OAuth {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+    def _extract_code(self, text: str) -> Optional[str]:
+        match = re.search(r'code=([A-Z_0-9]+)', text)
+        return match.group(1) if match else None
+
+    def _send_request(self, chat_id: str, text: str, reply_to_id: Optional[str] = None,
+                      skip_rate_limit: bool = False) -> Optional[str]:
+        """Базовая отправка сообщения"""
         if not self.enabled():
             return None
+
         if not skip_rate_limit:
             with self._lock:
                 now = time.time()
@@ -27,40 +48,43 @@ class YandexNotifier:
                     return None
                 self._last_send_ts = now
 
-        target_chat = chat_id if chat_id else self.chat_id
-        payload = {
-            "chat_id": target_chat,
-            "text": message
-        }
-        if reply_to_message_id:
-            payload["reply_message_id"] = reply_to_message_id
+        payload = {"chat_id": chat_id, "text": text}
+        if reply_to_id:
+            payload["reply_message_id"] = reply_to_id
 
         try:
             response = requests.post(
-                "https://botapi.messenger.yandex.net/bot/v1/messages/sendText/",
-                headers={
-                    "Authorization": f"OAuth {self.api_key}",
-                    "Content-Type": "application/json"
-                },
+                self._api_url(),
+                headers=self._headers(),
                 json=payload,
                 timeout=10
             )
             if response.status_code == 200:
                 result = response.json()
                 message_id = result.get("message_id")
-                code = self._extract_code(message)
+
+                code = self._extract_code(text)
                 if code and message_id:
                     self._message_ids[code] = message_id
                     self._code_by_msg_id[message_id] = code
+
                 return message_id
             return None
         except Exception as e:
             print(f"Yandex send error: {e}")
             return None
 
-    def send_reply(self, message: str, reply_to_message_id: str, chat_id: Optional[str] = None) -> Optional[str]:
+    def send(self, message: str, chat_id: Optional[str] = None,
+             skip_rate_limit: bool = False) -> Optional[str]:
+        """Отправка сообщения"""
+        target_chat = chat_id if chat_id else self.chat_id
+        return self._send_request(target_chat, message, skip_rate_limit=skip_rate_limit)
+
+    def send_reply(self, message: str, reply_to_message_id: str,
+                   chat_id: Optional[str] = None) -> Optional[str]:
         """Отправить сообщение как ответ (reply) на конкретное сообщение"""
-        return self.send(message, reply_to_message_id=reply_to_message_id, chat_id=chat_id, skip_rate_limit=True)
+        target_chat = chat_id if chat_id else self.chat_id
+        return self._send_request(target_chat, message, reply_to_id=reply_to_message_id, skip_rate_limit=True)
 
     def send_reply_by_code(self, message: str, code: str) -> bool:
         """Автоматический ответ на ранее отправленное уведомление с данным code"""
@@ -73,7 +97,3 @@ class YandexNotifier:
     def get_code_by_message_id(self, message_id: str) -> Optional[str]:
         """Получить code по message_id (для обработки реплаев от пользователя)"""
         return self._code_by_msg_id.get(message_id)
-
-    def _extract_code(self, text: str) -> Optional[str]:
-        match = re.search(r'code=([A-Z_0-9]+)', text)
-        return match.group(1) if match else None

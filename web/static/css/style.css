@@ -593,12 +593,12 @@ body {
         width: 95%;
         margin: 10px;
     }
-    
+
     .radio-group {
         flex-direction: column;
         gap: 8px;
     }
-    
+
     .status-badge {
         font-size: 10px;
         padding: 2px 6px;

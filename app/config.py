@@ -1,53 +1,50 @@
-#config
-from dataclasses import dataclass
+# app/config.py
+"""
+Конфигурация приложения
+"""
+
 import os
+from dataclasses import dataclass
+
 
 @dataclass
 class ModbusConfig:
+    """Конфигурация Modbus подключения"""
     ip: str
     port: int = 502
     unit_id: int = 1
 
-# === твой контроллер ===
+
+# ==================== КОНТРОЛЛЕР ====================
 CONTROLLER = ModbusConfig(
-    ip=os.getenv("CONTROLLER_IP", "xxxxxxxx"),
+    ip=os.getenv("CONTROLLER_IP", "192.168.1.100"),
     port=int(os.getenv("CONTROLLER_PORT", "502")),
     unit_id=int(os.getenv("UNIT_ID", "1")),
 )
 
-# Адреса бинарных (00000..00304 => 305 бит)
+# ==================== АДРЕСА БИНАРНЫХ СИГНАЛОВ ====================
 ERROR_BITS_START = 0
 ERROR_BITS_COUNT = 305
+READ_AS_COILS = True  # True - coils (fn=01), False - discrete inputs (fn=02)
 
-# Если у тебя читалось как coils — оставь True.
-# Если окажется, что это discrete inputs (fn=02), переключишь на False.
-READ_AS_COILS = True
-
+# ==================== ИНТЕРВАЛЫ ====================
 POLL_INTERVAL_SEC = float(os.getenv("POLL_INTERVAL_SEC", "2"))
-
-DB_PATH = os.getenv("DB_PATH", "diesel.db")
-
-# Где лежит cfgmodbus.txt
-CFG_PATH = os.getenv("CFG_PATH", "data/cfgmodbus.txt")
-
-# --- Ключ для “смещения адресов” ---
-# В Modbus документации иногда адреса “человеческие”, а библиотека ждёт 0-based.
-# Если видишь, что регистр 01000 читается только по адресу 999 — поставь -1.
-REGISTER_ADDRESS_OFFSET = int(os.getenv("REGISTER_ADDRESS_OFFSET", "0"))
-
-# --- Логирование ---
-# 1) Снимок всех “важных” аналоговых регистров раз в N секунд (для трендов)
 SNAPSHOT_EVERY_SEC = int(os.getenv("SNAPSHOT_EVERY_SEC", "300"))  # 5 минут
 
-# 2) Delta-логирование: писать значение если изменилось больше чем epsilon
+# ==================== ПУТИ ====================
+DB_PATH = os.getenv("DB_PATH", "diesel.db")
+CFG_PATH = os.getenv("CFG_PATH", "data/cfgmodbus.txt")
+
+# ==================== MODBUS ====================
+REGISTER_ADDRESS_OFFSET = int(os.getenv("REGISTER_ADDRESS_OFFSET", "0"))
 DEFAULT_EPSILON = float(os.getenv("DEFAULT_EPSILON", "0.0"))
 
-# --- Telegram ---
+# ==================== TELEGRAM ====================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-
 TELEGRAM_NOTIFY_CHAT_ID = os.getenv("TELEGRAM_NOTIFY_CHAT_ID", "").strip()
 TELEGRAM_COMMAND_CHAT_ID = os.getenv("TELEGRAM_COMMAND_CHAT_ID", "").strip()
 
-# Яндекс Мессенджер
+# ==================== YANDEX MESSENGER ====================
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY", "").strip()
 YANDEX_CHAT_ID = os.getenv("YANDEX_CHAT_ID", "").strip()
+YANDEX_WEBHOOK_PORT = int(os.getenv("YANDEX_WEBHOOK_PORT", "5002"))

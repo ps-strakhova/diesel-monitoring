@@ -1,66 +1,79 @@
-// web/static/js/main.js
+/**
+ * Основной JavaScript для веб-интерфейса мониторинга ДГУ
+ */
+
 console.log('✅ main.js загружен');
+
+// ==================== КОНСТАНТЫ ====================
+const COLORS = ['#002f87', '#ec6d22', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#f59e0b', '#ec4899'];
+const PARAM_LABELS = {
+    'temp': 'Температура ОЖ',
+    'oil_pressure': 'Давление масла',
+    'fuel': 'Уровень топлива',
+    'battery': 'Напряжение АКБ',
+    'f_gen': 'Частота генератора',
+    'RPM': 'Обороты'
+};
+const PARAM_UNITS = {
+    'temp': '°C',
+    'oil_pressure': 'Бар',
+    'fuel': '%',
+    'battery': 'В',
+    'f_gen': 'Гц',
+    'RPM': 'об/мин'
+};
+
+// ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+
+function getTodayDate() {
+    const today = new Date();
+    const mskDate = new Date(today.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+    return mskDate.toISOString().split('T')[0];
+}
+
+function getMskTime() {
+    const now = new Date();
+    return new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+}
+
+function formatMskTime(timestamp) {
+    const date = new Date(timestamp * 1000);
+    const mskDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+    return mskDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function formatDateTime(timestamp, hours) {
+    const date = new Date(timestamp * 1000);
+    const mskDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+    if (hours > 24) {
+        return mskDate.toLocaleString('ru-RU', {
+            day: '2-digit', month: '2-digit', year: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+        });
+    }
+    return mskDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/[&<>]/g, function(m) {
+        return m === '&' ? '&amp;' : m === '<' ? '&lt;' : '&gt;';
+    });
+}
+
+// ==================== ОСНОВНОЙ КЛАСС ====================
 
 class DieselMonitoring {
     constructor() {
         this.controllers = [];
         this.currentControllerId = '';
-        this.currentDate = this.getTodayDate();
+        this.currentDate = getTodayDate();
         this.currentTab = 'events';
         this.chart = null;
-        this.exportType = null;
         this.chartHours = 24;
-        this.statusUpdateInterval = null;
         this.namesCache = {};
-        this.colors = ['#002f87', '#ec6d22', '#10b981', '#8b5cf6', '#ef4444', '#06b6d4', '#f59e0b', '#ec4899'];
+        this.colors = COLORS;
         this.init();
-    }
-
-    getTodayDate() {
-        const today = new Date();
-        const mskDate = new Date(today.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-        return mskDate.toISOString().split('T')[0];
-    }
-
-    getMskTime() {
-        const now = new Date();
-        return new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-    }
-
-    formatMskTime(timestamp) {
-        const date = new Date(timestamp * 1000);
-        const mskDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-        return mskDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    }
-
-    formatDateTimeForTooltip(timestamp, hours) {
-        const date = new Date(timestamp * 1000);
-        const mskDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-
-        if (hours > 24) {
-            return mskDate.toLocaleString('ru-RU', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-        } else {
-            return mskDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-        }
-    }
-
-    formatXAxisLabel(timestamp, hours) {
-        const date = new Date(timestamp * 1000);
-        const mskDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
-
-        if (hours > 48) {
-            return mskDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'numeric' });
-        } else if (hours > 24) {
-            return mskDate.toLocaleString('ru-RU', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
-        } else {
-            return mskDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-        }
     }
 
     async init() {
@@ -75,54 +88,25 @@ class DieselMonitoring {
         this.adjustNotificationsHeight();
 
         await this.initLLM();
-        this.initDropdowns();
-        
-        setInterval(() => this.loadCurrentAlerts(), 5000);
+
+        // Периодические обновления
+        setInterval(() => this.loadCurrentAlerts(), 1000);
         setInterval(() => {
-            if (this.currentTab === 'status') {
-                this.loadCurrentStatus();
-            }
-        }, 10000);
+            if (this.currentTab === 'status') this.loadCurrentStatus();
+        }, 3000);
         setInterval(() => {
             if (this.currentTab === 'events') {
                 this.loadNotifications();
                 this.adjustNotificationsHeight();
             }
-        }, 30000);
-        setInterval(() => {
-            this.loadParameterChart();
-        }, 10000);
+        }, 1000);
+        setInterval(() => this.loadParameterChart(), 1000);
         setInterval(() => this.updateClock(), 1000);
 
         window.addEventListener('resize', () => this.adjustNotificationsHeight());
     }
 
-    adjustNotificationsHeight() {
-        const eventsContainer = document.getElementById('events-container');
-        const notificationsContainer = document.getElementById('notifications-container');
-        const statusContainer = document.getElementById('status-container');
-        const eventsFilter = document.getElementById('events-filter');
-
-        if (!eventsContainer || !notificationsContainer) return;
-
-        let availableHeight = window.innerHeight - 250;
-
-        if (eventsFilter && this.currentTab === 'events') {
-            availableHeight -= eventsFilter.offsetHeight;
-        }
-
-        availableHeight = Math.max(1000, Math.min(availableHeight, 1000));
-
-        notificationsContainer.style.height = `${availableHeight}px`;
-
-        if (statusContainer) {
-            statusContainer.style.height = `${availableHeight}px`;
-            const statusContent = document.getElementById('status-content');
-            if (statusContent) {
-                statusContent.style.height = `${availableHeight}px`;
-            }
-        }
-    }
+    // ==================== КОНТРОЛЛЕРЫ ====================
 
     async loadControllers() {
         try {
@@ -137,18 +121,13 @@ class DieselMonitoring {
             const select = document.getElementById('controller-filter');
             if (select) {
                 select.innerHTML = '<option value="">Все установки</option>';
-
                 for (const ctrl of this.controllers) {
                     this.namesCache[ctrl.id] = await this.getControllerDisplayName(ctrl.id);
-                }
-
-                for (const ctrl of this.controllers) {
                     const option = document.createElement('option');
                     option.value = ctrl.id;
                     option.textContent = this.namesCache[ctrl.id];
                     select.appendChild(option);
                 }
-
                 if (this.controllers.length > 0 && !this.currentControllerId) {
                     this.currentControllerId = this.controllers[0].id.toString();
                     select.value = this.currentControllerId;
@@ -160,9 +139,7 @@ class DieselMonitoring {
     }
 
     async getControllerDisplayName(controllerId) {
-        if (this.namesCache[controllerId]) {
-            return this.namesCache[controllerId];
-        }
+        if (this.namesCache[controllerId]) return this.namesCache[controllerId];
 
         try {
             const response = await fetch(`/api/controller-name/${controllerId}`);
@@ -175,112 +152,13 @@ class DieselMonitoring {
             console.error('Ошибка получения имени контроллера:', error);
             const controller = this.controllers.find(c => c.id == controllerId);
             const fallbackName = controller ? controller.name : `ДГУ ${controllerId}`;
-            const displayName = controller && controller.ip ? `${fallbackName} (${controller.ip})` : fallbackName;
+            const displayName = controller?.ip ? `${fallbackName} (${controller.ip})` : fallbackName;
             this.namesCache[controllerId] = displayName;
             return displayName;
         }
     }
 
-    async loadBitsStatus(controllerId) {
-        try {
-            const response = await fetch(`/api/current-bits-status?controller_id=${controllerId}`);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
-            return data.bits || {};
-        } catch (error) {
-            console.error('Ошибка загрузки статуса битов:', error);
-            return {};
-        }
-    }
-
-    async loadCurrentAlerts() {
-        try {
-            let url = '/api/current-alerts';
-            if (this.currentControllerId && this.currentControllerId !== '') {
-                url += `?controller_id=${this.currentControllerId}`;
-            }
-
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const alerts = await response.json();
-
-            const alertsContainer = document.getElementById('current-alerts');
-            const alertsSummary = document.getElementById('alerts-summary');
-            if (!alertsContainer) return;
-
-            const activeProblems = alerts.filter(a => a.severity === 'alarm' || a.severity === 'warn');
-            const totalAlarms = activeProblems.filter(a => a.severity === 'alarm').length;
-            const totalWarns = activeProblems.filter(a => a.severity === 'warn').length;
-
-            if (alertsSummary) {
-                alertsSummary.innerHTML = `
-                    ${totalAlarms > 0 ? `<span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-semibold">🚨 ${totalAlarms}</span>` : ''}
-                    ${totalWarns > 0 ? `<span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-semibold">⚠️ ${totalWarns}</span>` : ''}
-                    ${totalAlarms === 0 && totalWarns === 0 ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✅</span>' : ''}
-                `;
-            }
-
-            if (activeProblems.length === 0) {
-                alertsContainer.innerHTML = `
-                    <div class="text-center text-green-600 py-4 text-sm flex items-center justify-center gap-2">
-                        <span>✅</span> Все параметры в норме, активных аварий нет
-                    </div>
-                `;
-                return;
-            }
-
-            const grouped = {};
-            for (const alert of activeProblems) {
-                const controllerName = await this.getControllerDisplayName(alert.controller_id);
-                if (!grouped[controllerName]) grouped[controllerName] = [];
-                grouped[controllerName].push(alert);
-            }
-
-            let html = '';
-            for (const [controllerName, items] of Object.entries(grouped)) {
-                const alarms = items.filter(a => a.severity === 'alarm');
-                const warns = items.filter(a => a.severity === 'warn');
-
-                html += `
-                    <div class="mb-4 border-b border-gray-200 pb-3 last:border-0">
-                        <div class="flex justify-between items-center mb-3">
-                            <div class="flex items-center gap-2">
-                                <span class="text-xs text-gray-500">📌</span>
-                                <span class="text-sm font-medium text-gray-600">${this.escapeHtml(controllerName)}</span>
-                            </div>
-                            <div class="flex gap-2">
-                                ${alarms.length > 0 ? `<span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-semibold">🚨 ${alarms.length}</span>` : ''}
-                                ${warns.length > 0 ? `<span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-semibold">⚠️ ${warns.length}</span>` : ''}
-                            </div>
-                        </div>
-                `;
-
-                items.forEach(alert => {
-                    const color = alert.severity === 'alarm' ? 'red' : 'yellow';
-                    const icon = alert.severity === 'alarm' ? '🚨' : '⚠️';
-
-                    html += `
-                        <div class="bg-${color}-50 border-l-4 border-${color}-500 rounded-lg p-2 mb-2 text-xs">
-                            <div class="font-medium text-${color}-800">${icon} ${this.escapeHtml(alert.title)}</div>
-                            <div class="text-${color}-600 mt-0.5">${this.escapeHtml(alert.details)}</div>
-                            <div class="text-${color}-400 font-mono mt-0.5">${alert.code}</div>
-                        </div>
-                    `;
-                });
-
-                html += `</div>`;
-            }
-
-            alertsContainer.innerHTML = html;
-
-        } catch (error) {
-            console.error('Ошибка загрузки текущих аварий:', error);
-            const alertsContainer = document.getElementById('current-alerts');
-            if (alertsContainer) {
-                alertsContainer.innerHTML = '<div class="text-center text-red-500 py-4 text-sm">❌ Ошибка загрузки</div>';
-            }
-        }
-    }
+    // ==================== УВЕДОМЛЕНИЯ ====================
 
     async loadNotifications() {
         try {
@@ -302,55 +180,21 @@ class DieselMonitoring {
             }
 
             container.innerHTML = '';
-
             for (const notif of notifications) {
-                let bgColor, borderColor, icon;
-
-                switch(notif.severity) {
-                    case 'alarm':
-                        bgColor = 'bg-red-50';
-                        borderColor = 'border-red-500';
-                        icon = '🚨';
-                        break;
-                    case 'warn':
-                        bgColor = 'bg-yellow-50';
-                        borderColor = 'border-yellow-500';
-                        icon = '⚠️';
-                        break;
-                    case 'success':
-                        bgColor = 'bg-green-50';
-                        borderColor = 'border-green-500';
-                        icon = '✅';
-                        break;
-                    default:
-                        bgColor = 'bg-gray-50';
-                        borderColor = 'border-gray-300';
-                        icon = 'ℹ️';
-                }
-
+                const severityClass = this.getSeverityClass(notif.severity);
                 const controllerDisplay = await this.getControllerDisplayName(notif.controller_id);
-
-                let timeStr = notif.time_msk || '';
-                if (notif.ts) {
-                    timeStr = this.formatMskTime(notif.ts);
-                }
-
-                let severityText = notif.severity || 'info';
-                if (severityText === 'success') severityText = 'успех';
-                else if (severityText === 'alarm') severityText = 'авария';
-                else if (severityText === 'warn') severityText = 'предупреждение';
-                else severityText = 'инфо';
+                const timeStr = notif.time_msk || (notif.ts ? formatMskTime(notif.ts) : '');
 
                 container.innerHTML += `
-                    <div class="${bgColor} border-l-4 ${borderColor} rounded-lg p-3 mb-2 transition-all hover:shadow-md">
+                    <div class="${severityClass.bg} border-l-4 ${severityClass.border} rounded-lg p-3 mb-2 transition-all hover:shadow-md">
                         <div class="flex justify-between items-start">
                             <span class="text-xs text-gray-500">${timeStr}</span>
-                            <span class="text-xs px-2 py-0.5 rounded-full ${this.getSeverityBadgeClass(notif.severity)}">${icon} ${severityText}</span>
+                            <span class="text-xs px-2 py-0.5 rounded-full ${severityClass.badge}">${severityClass.icon} ${severityClass.label}</span>
                         </div>
-                        <div class="text-xs text-gray-500 mt-0.5">📌 ${this.escapeHtml(controllerDisplay)}</div>
-                        <div class="mt-1.5 text-sm font-medium ${this.getTitleClass(notif.severity)}">${this.escapeHtml(notif.clean_title || notif.title)}</div>
-                        <div class="text-xs ${this.getDetailsClass(notif.severity)} mt-0.5" style="white-space: pre-line;">${this.escapeHtml(notif.clean_details || notif.details || '')}</div>
-                        <div class="text-xs text-gray-400 mt-1 font-mono">${this.escapeHtml(notif.code || '')}</div>
+                        <div class="text-xs text-gray-500 mt-0.5">📌 ${escapeHtml(controllerDisplay)}</div>
+                        <div class="mt-1.5 text-sm font-medium ${severityClass.title}">${escapeHtml(notif.clean_title || notif.title)}</div>
+                        <div class="text-xs ${severityClass.details} mt-0.5" style="white-space: pre-line;">${escapeHtml(notif.details || '')}</div>
+                        <div class="text-xs text-gray-400 mt-1 font-mono">${escapeHtml(notif.code || '')}</div>
                     </div>
                 `;
             }
@@ -359,7 +203,6 @@ class DieselMonitoring {
             if (counter) counter.textContent = notifications.length;
 
             this.adjustNotificationsHeight();
-
         } catch (error) {
             console.error('❌ Ошибка уведомлений:', error);
             const container = document.getElementById('notifications-container');
@@ -369,32 +212,29 @@ class DieselMonitoring {
         }
     }
 
-    getSeverityBadgeClass(severity) {
-        switch(severity) {
-            case 'alarm': return 'bg-red-100 text-red-700';
-            case 'warn': return 'bg-yellow-100 text-yellow-700';
-            case 'success': return 'bg-green-100 text-green-700';
-            default: return 'bg-gray-100 text-gray-600';
-        }
+    getSeverityClass(severity) {
+        const map = {
+            'alarm': {
+                bg: 'bg-red-50', border: 'border-red-500', badge: 'bg-red-100 text-red-700',
+                title: 'text-red-800', details: 'text-red-600', icon: '🚨', label: 'авария'
+            },
+            'warn': {
+                bg: 'bg-yellow-50', border: 'border-yellow-500', badge: 'bg-yellow-100 text-yellow-700',
+                title: 'text-yellow-800', details: 'text-yellow-600', icon: '⚠️', label: 'предупреждение'
+            },
+            'success': {
+                bg: 'bg-green-50', border: 'border-green-500', badge: 'bg-green-100 text-green-700',
+                title: 'text-green-800', details: 'text-green-600', icon: '✅', label: 'успех'
+            },
+            'default': {
+                bg: 'bg-gray-50', border: 'border-gray-300', badge: 'bg-gray-100 text-gray-600',
+                title: 'text-gray-800', details: 'text-gray-600', icon: 'ℹ️', label: 'инфо'
+            }
+        };
+        return map[severity] || map['default'];
     }
 
-    getTitleClass(severity) {
-        switch(severity) {
-            case 'alarm': return 'text-red-800';
-            case 'warn': return 'text-yellow-800';
-            case 'success': return 'text-green-800';
-            default: return 'text-gray-800';
-        }
-    }
-
-    getDetailsClass(severity) {
-        switch(severity) {
-            case 'alarm': return 'text-red-600';
-            case 'warn': return 'text-yellow-600';
-            case 'success': return 'text-green-600';
-            default: return 'text-gray-600';
-        }
-    }
+    // ==================== СТАТУС ====================
 
     async loadCurrentStatus() {
         let controllerId = this.currentControllerId;
@@ -416,14 +256,13 @@ class DieselMonitoring {
             const data = await response.json();
 
             const statusContent = document.getElementById('status-content');
-            const mskNow = this.getMskTime();
+            const mskNow = getMskTime();
             const updateTime = mskNow.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
             if (data.status_data) {
                 const html = await this.renderPrettyStatus(data.status_data, updateTime, controllerId);
                 statusContent.innerHTML = html;
             }
-
         } catch (error) {
             console.error('Ошибка загрузки статуса:', error);
             const statusContent = document.getElementById('status-content');
@@ -433,16 +272,830 @@ class DieselMonitoring {
         }
     }
 
+    // ==================== ГРАФИКИ ====================
+
+    async loadParameterChart() {
+        try {
+            let controllerId = this.currentControllerId;
+            let url;
+            if (controllerId && controllerId !== '') {
+                url = `/api/parameters/history?controller_id=${controllerId}&hours=${this.chartHours}`;
+            } else {
+                url = `/api/parameters/history?hours=${this.chartHours}`;
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+
+            const ctx = document.getElementById('parameterChart')?.getContext('2d');
+            if (!ctx) return;
+
+            if (this.chart) this.chart.destroy();
+
+            await this.updateChartHeader(controllerId, this.chartHours);
+
+            const selectedParam = document.getElementById('parameter-select')?.value || 'temp';
+            const paramLabel = PARAM_LABELS[selectedParam] || selectedParam;
+
+            const datasets = this.buildChartDatasets(data, selectedParam, controllerId, paramLabel);
+
+            if (datasets.length === 0) {
+                this.showNoDataChart(ctx, 'Нет данных для отображения');
+                return;
+            }
+
+            const allTimestamps = this.getAllTimestamps(datasets);
+            const sortedTimestamps = allTimestamps.sort((a, b) => a - b);
+
+            this.chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: sortedTimestamps.map(ts => this.formatXAxisLabel(ts)),
+                    datasets: datasets.map(ds => this.prepareDatasetData(ds, sortedTimestamps))
+                },
+                options: this.getChartOptions(sortedTimestamps, selectedParam)
+            });
+        } catch (error) {
+            console.error('Ошибка загрузки графика:', error);
+            const ctx = document.getElementById('parameterChart')?.getContext('2d');
+            if (ctx) this.showNoDataChart(ctx, 'Ошибка загрузки данных');
+        }
+    }
+
+    buildChartDatasets(data, selectedParam, controllerId, paramLabel) {
+        const datasets = [];
+        let colorIndex = 0;
+
+        if (controllerId && controllerId !== '') {
+            const paramData = data[selectedParam] || [];
+            if (paramData.length > 0) {
+                datasets.push({
+                    label: paramLabel,
+                    data: paramData,
+                    borderColor: this.colors[0],
+                    backgroundColor: this.colors[0] + '20',
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    pointHoverRadius: 6,
+                    tension: 0.3,
+                    fill: false
+                });
+            }
+        } else {
+            const paramPrefix = selectedParam + '_ctrl_';
+            for (const [key, value] of Object.entries(data)) {
+                if (!key.startsWith(paramPrefix) && key !== selectedParam) continue;
+                const paramData = value.data || [];
+                if (paramData.length === 0) continue;
+                datasets.push({
+                    label: value.name || `Установка ${value.controller_id}`,
+                    data: paramData,
+                    borderColor: this.colors[colorIndex % this.colors.length],
+                    backgroundColor: this.colors[colorIndex % this.colors.length] + '20',
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    pointHoverRadius: 5,
+                    tension: 0.3,
+                    fill: false
+                });
+                colorIndex++;
+            }
+        }
+        return datasets;
+    }
+
+    getAllTimestamps(datasets) {
+        const timestamps = new Set();
+        datasets.forEach(ds => {
+            ds.data.forEach(d => { if (d.ts) timestamps.add(d.ts); });
+        });
+        return Array.from(timestamps);
+    }
+
+    prepareDatasetData(dataset, sortedTimestamps) {
+        const dataMap = new Map(dataset.data.map(d => [d.ts, d.value]));
+        return {
+            label: dataset.label,
+            data: sortedTimestamps.map(ts => dataMap.get(ts) ?? null),
+            borderColor: dataset.borderColor,
+            backgroundColor: dataset.backgroundColor,
+            borderWidth: dataset.borderWidth || 2,
+            pointRadius: dataset.pointRadius || 2,
+            pointHoverRadius: dataset.pointHoverRadius || 5,
+            tension: dataset.tension || 0.3,
+            fill: dataset.fill || false
+        };
+    }
+
+    getChartOptions(sortedTimestamps, selectedParam) {
+        return {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { display: true, position: 'top', labels: { font: { size: 10 } } },
+                tooltip: {
+                    backgroundColor: '#1f2937',
+                    titleColor: '#ffffff',
+                    bodyColor: '#e5e7eb',
+                    borderColor: '#002f87',
+                    borderWidth: 1,
+                    callbacks: {
+                        title: (tooltipItems) => {
+                            const index = tooltipItems[0].dataIndex;
+                            const ts = sortedTimestamps[index];
+                            return ts ? `📅 ${formatDateTime(ts, this.chartHours)}` : tooltipItems[0].label;
+                        }
+                    }
+                },
+                zoom: {
+                    zoom: { wheel: { enabled: true, speed: 0.05 }, pinch: { enabled: true }, mode: 'x', drag: false },
+                    pan: { enabled: true, mode: 'x', speed: 5 },
+                    limits: { x: { min: 'original', max: 'original' } }
+                }
+            },
+            scales: {
+                y: {
+                    grid: { color: '#e5e7eb' },
+                    ticks: { color: '#6b7280', font: { size: 10 } },
+                    title: { display: true, text: PARAM_UNITS[selectedParam] || '', font: { size: 9 } }
+                },
+                x: {
+                    grid: { display: false },
+                    ticks: {
+                        color: '#6b7280',
+                        font: { size: 9 },
+                        maxRotation: 45,
+                        minRotation: 45,
+                        autoSkip: true,
+                        maxTicksLimit: 12
+                    }
+                }
+            }
+        };
+    }
+
+    formatXAxisLabel(ts) {
+        const date = new Date(ts * 1000);
+        const mskDate = new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Moscow' }));
+        if (this.chartHours > 48) {
+            return mskDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'numeric' });
+        } else if (this.chartHours > 24) {
+            return mskDate.toLocaleString('ru-RU', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+        return mskDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    async updateChartHeader(controllerId, hours) {
+        const headerContainer = document.getElementById('chart-header');
+        if (!headerContainer) return;
+
+        let displayName = controllerId ? await this.getControllerDisplayName(controllerId) : 'Все установки';
+        let periodText = hours < 24 ? `Последние ${hours} часов` :
+                        hours === 24 ? `Последние ${hours} часа` :
+                        `Последние ${hours / 24} дней`;
+
+        headerContainer.innerHTML = `
+            <div class="flex justify-between items-center flex-wrap gap-2">
+                <div>
+                    <span class="font-semibold text-diesel-blue">📈 Параметры</span>
+                    <span class="text-gray-500 text-sm ml-1">${escapeHtml(displayName)}</span>
+                </div>
+                <div class="text-xs text-gray-400">📅 ${periodText}</div>
+            </div>
+        `;
+    }
+
+    showNoDataChart(ctx, message) {
+        if (this.chart) this.chart.destroy();
+        this.chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: ['Нет данных'], datasets: [{ label: message, data: [null], borderColor: '#9ca3af', borderDash: [5, 5] }] },
+            options: { responsive: true, plugins: { legend: { display: true } } }
+        });
+    }
+
+    // ==================== ТЕКУЩИЕ АВАРИИ ====================
+
+    async loadCurrentAlerts() {
+        try {
+            let url = '/api/current-alerts';
+            if (this.currentControllerId && this.currentControllerId !== '') {
+                url += `?controller_id=${this.currentControllerId}`;
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const alerts = await response.json();
+
+            const alertsContainer = document.getElementById('current-alerts');
+            const alertsSummary = document.getElementById('alerts-summary');
+            if (!alertsContainer) return;
+
+            // ===== ПРОСТАЯ ФИЛЬТРАЦИЯ: показываем ВСЕ аварии и предупреждения =====
+            // Убираем сложную логику фильтрации, оставляем только проверку severity
+            const activeProblems = alerts.filter(a =>
+                a.severity === 'alarm' || a.severity === 'warn'
+            );
+
+            const totalAlarms = activeProblems.filter(a => a.severity === 'alarm').length;
+            const totalWarns = activeProblems.filter(a => a.severity === 'warn').length;
+
+            // Обновляем сводку
+            if (alertsSummary) {
+                alertsSummary.innerHTML = `
+                    ${totalAlarms > 0 ? `<span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-semibold">🚨 ${totalAlarms}</span>` : ''}
+                    ${totalWarns > 0 ? `<span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-semibold">⚠️ ${totalWarns}</span>` : ''}
+                    ${totalAlarms === 0 && totalWarns === 0 ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full">✅</span>' : ''}
+                `;
+            }
+
+            // Если нет активных проблем
+            if (activeProblems.length === 0) {
+                alertsContainer.innerHTML = `
+                    <div class="text-center text-green-600 py-4 text-sm flex items-center justify-center gap-2">
+                        <span>✅</span> Все параметры в норме, активных аварий нет
+                    </div>
+                `;
+                return;
+            }
+
+            // Группируем по установкам
+            const grouped = {};
+            for (const alert of activeProblems) {
+                const controllerName = await this.getControllerDisplayName(alert.controller_id);
+                if (!grouped[controllerName]) grouped[controllerName] = [];
+                grouped[controllerName].push(alert);
+            }
+
+            // Рендерим
+            let html = '';
+            for (const [controllerName, items] of Object.entries(grouped)) {
+                const alarms = items.filter(a => a.severity === 'alarm');
+                const warns = items.filter(a => a.severity === 'warn');
+
+                html += `
+                    <div class="mb-4 border-b border-gray-200 pb-3 last:border-0">
+                        <div class="flex justify-between items-center mb-3">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs text-gray-500">📌</span>
+                                <span class="text-sm font-medium text-gray-600">${escapeHtml(controllerName)}</span>
+                            </div>
+                            <div class="flex gap-2">
+                                ${alarms.length > 0 ? `<span class="text-xs bg-red-100 text-red-700 px-2 py-1 rounded-full font-semibold">🚨 ${alarms.length}</span>` : ''}
+                                ${warns.length > 0 ? `<span class="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-semibold">⚠️ ${warns.length}</span>` : ''}
+                            </div>
+                        </div>
+                `;
+
+                items.forEach(alert => {
+                    const color = alert.severity === 'alarm' ? 'red' : 'yellow';
+                    const icon = alert.severity === 'alarm' ? '🚨' : '⚠️';
+                    const timeStr = alert.ts ? formatMskTime(alert.ts) : '';
+
+                    html += `
+                        <div class="bg-${color}-50 border-l-4 border-${color}-500 rounded-lg p-2 mb-2 text-xs">
+                            <div class="flex justify-between items-start">
+                                <div class="font-medium text-${color}-800">${icon} ${escapeHtml(alert.title || 'Неизвестное событие')}</div>
+                                <span class="text-${color}-400 text-[10px] whitespace-nowrap">${timeStr}</span>
+                            </div>
+                            <div class="text-${color}-600 mt-0.5">${escapeHtml(alert.details || '')}</div>
+                            <div class="text-${color}-400 font-mono mt-0.5">${escapeHtml(alert.code || '')}</div>
+                        </div>
+                    `;
+                });
+
+                html += `</div>`;
+            }
+
+            alertsContainer.innerHTML = html;
+
+        } catch (error) {
+            console.error('Ошибка загрузки текущих аварий:', error);
+            const alertsContainer = document.getElementById('current-alerts');
+            if (alertsContainer) {
+                alertsContainer.innerHTML = `
+                    <div class="text-center text-red-500 py-4 text-sm">
+                        ❌ Ошибка загрузки: ${error.message}
+                    </div>
+                `;
+            }
+        }
+    }
+
+    // ==================== BIT-СТАТУС ====================
+
+    async loadBitsStatus(controllerId) {
+        try {
+            const response = await fetch(`/api/current-bits-status?controller_id=${controllerId}`);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            return data.bits || {};
+        } catch (error) {
+            console.error('Ошибка загрузки статуса битов:', error);
+            return {};
+        }
+    }
+
+    // ==================== LLM / ЧАТ ====================
+
+    async initLLM() {
+        console.log('🔄 Проверка LLM агента...');
+        try {
+            const response = await fetch('/api/llm/status');
+            const status = await response.json();
+            if (status.status === 'ready') {
+                console.log('✅ LLM агент готов');
+                this.addChatMessage('✅ AI помощник готов отвечать на вопросы по документации', 'assistant');
+            } else {
+                console.warn('⚠️ LLM агент не готов');
+                this.addChatMessage('⚠️ AI помощник временно недоступен. Проверьте настройки.', 'assistant');
+            }
+        } catch (error) {
+            console.error('❌ Ошибка подключения к LLM агенту:', error);
+            this.addChatMessage('❌ AI помощник недоступен. Убедитесь, что сервер запущен.', 'assistant');
+        }
+    }
+
+    async sendMessage() {
+        const input = document.getElementById('chat-input');
+        const question = input.value.trim();
+        if (!question) return;
+
+        this.addChatMessage(question, 'user');
+        input.value = '';
+        this.showTypingIndicator();
+
+        const monitoringData = await this.getLLMMonitoringData();
+
+        try {
+            const response = await fetch('/api/llm/ask', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question, monitoring_data: monitoringData })
+            });
+
+            const result = await response.json();
+            this.hideTypingIndicator();
+
+            if (result.success) {
+                this.addChatMessage(result.answer, 'assistant');
+                if (result.sources && result.sources.length > 0) {
+                    this.showSources(result.sources);
+                }
+            } else {
+                this.addChatMessage(result.answer, 'assistant');
+            }
+        } catch (error) {
+            this.hideTypingIndicator();
+            this.addChatMessage('❌ Ошибка подключения к AI помощнику. Проверьте, что сервер запущен.', 'assistant');
+            console.error('LLM error:', error);
+        }
+    }
+
+    async getLLMMonitoringData() {
+        let controllerId = this.currentControllerId;
+        if (!controllerId && this.controllers.length > 0) {
+            controllerId = this.controllers[0].id;
+        }
+        if (!controllerId) return {};
+
+        try {
+            const response = await fetch(`/api/status/${controllerId}`);
+            const data = await response.json();
+            if (data.status_data) {
+                const s = data.status_data;
+                return {
+                    unit_name: s.unit_name,
+                    rpm: s.engine?.rpm !== '—' ? parseFloat(s.engine.rpm) : null,
+                    temp: s.sensors?.temp !== '—' ? parseFloat(s.sensors.temp) : null,
+                    oil: s.sensors?.oil !== '—' ? parseFloat(s.sensors.oil) : null,
+                    battery: s.sensors?.battery !== '—' ? parseFloat(s.sensors.battery) : null,
+                    fuel: s.sensors?.fuel !== '—' ? parseFloat(s.sensors.fuel) : null,
+                    mode: s.general?.mains_state || 'НОРМАЛЬНЫЙ'
+                };
+            }
+            return {};
+        } catch (error) {
+            console.error('Ошибка получения данных для LLM:', error);
+            return {};
+        }
+    }
+
+    addChatMessage(text, role) {
+        const container = document.getElementById('chat-messages');
+        if (!container) return;
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `chat-message p-2 rounded-lg text-xs mb-1 ${
+            role === 'user' ? 'bg-diesel-blue text-white ml-4' : 'bg-gray-100 text-gray-700 mr-4'
+        }`;
+        messageDiv.textContent = this.wrapText(text, 60);
+        messageDiv.style.whiteSpace = 'pre-wrap';
+        container.appendChild(messageDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    wrapText(text, maxLength = 80) {
+        if (!text) return '';
+        const lines = [];
+        let currentLine = '';
+        const words = text.split(' ');
+        for (const word of words) {
+            if (word.length > maxLength) {
+                if (currentLine.trim()) { lines.push(currentLine.trim()); currentLine = ''; }
+                for (let i = 0; i < word.length; i += maxLength) {
+                    lines.push(word.slice(i, i + maxLength));
+                }
+            } else if ((currentLine + ' ' + word).length > maxLength) {
+                if (currentLine.trim()) lines.push(currentLine.trim());
+                currentLine = word;
+            } else {
+                currentLine += (currentLine ? ' ' : '') + word;
+            }
+        }
+        if (currentLine.trim()) lines.push(currentLine.trim());
+        return lines.join(' ');
+    }
+
+    showSources(sources) {
+        const container = document.getElementById('chat-messages');
+        if (!container) return;
+        const sourcesDiv = document.createElement('div');
+        sourcesDiv.className = 'p-2 rounded-lg text-xs bg-blue-50 text-blue-600 mr-4 mb-1 mt-0.5';
+        sourcesDiv.innerHTML = '📚 <strong>Источники:</strong> ' + sources.map(s => s.source).join(', ');
+        container.appendChild(sourcesDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    showTypingIndicator() {
+        const container = document.getElementById('chat-messages');
+        if (!container) return;
+        const typingDiv = document.createElement('div');
+        typingDiv.id = 'typing-indicator';
+        typingDiv.className = 'p-2 rounded-lg text-xs bg-gray-100 text-gray-500 mr-4 mb-1';
+        typingDiv.innerHTML = '🤔 Агент думает <span class="typing-dots">...</span>';
+        container.appendChild(typingDiv);
+        container.scrollTop = container.scrollHeight;
+    }
+
+    hideTypingIndicator() {
+        const typingDiv = document.getElementById('typing-indicator');
+        if (typingDiv) typingDiv.remove();
+    }
+
+    getConversationHistory() {
+        const container = document.getElementById('chat-messages');
+        if (!container) return [];
+        const messages = [];
+        const messageDivs = container.querySelectorAll('.chat-message');
+        messageDivs.forEach(div => {
+            const isUser = div.classList.contains('bg-diesel-blue');
+            const text = div.innerText || div.textContent;
+            if (text.includes('Агент думает') || text.includes('готов отвечать')) return;
+            messages.push({ role: isUser ? 'user' : 'assistant', text });
+        });
+        return messages;
+    }
+
+    // ==================== СКАЧИВАНИЕ ДОКУМЕНТОВ ====================
+
+async downloadServiceAct(type = 'service') {
+    try {
+        const displayName = await this.getControllerDisplayName(this.currentControllerId);
+
+        // Карта соответствия типов и имен файлов
+        const fileMap = {
+            'service': {
+                name: 'АКТ Диагностики и осмотра.docx',
+                display: 'Акт обслуживания'
+            },
+            'claim': {
+                name: 'АКТ Заявка по неисправности.docx',
+                display: 'Акт заявки'
+            },
+            'work_order': {
+                name: 'Заказ наряд.docx',
+                display: 'Заказ-наряд'
+            }
+        };
+
+        const fileInfo = fileMap[type] || fileMap['service'];
+
+        // Скачиваем файл через API
+        const response = await fetch(`/api/download-template/${encodeURIComponent(fileInfo.name)}`, {
+            method: 'GET'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Файл не найден');
+        }
+
+        // Получаем blob и скачиваем
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileInfo.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        this.showToast(`✅ ${fileInfo.display} успешно скачан`, 'success');
+    } catch (error) {
+        console.error('Ошибка:', error);
+        this.showToast(`❌ Ошибка при скачивании: ${error.message}`, 'error');
+    }
+}
+
+    // ==================== ЭКСПОРТ ====================
+
+    showExportModal(type) {
+        this.exportType = type;
+        const modal = document.getElementById('exportModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalContent = document.getElementById('modalContent');
+        if (!modal || !modalContent) return;
+
+        const forms = {
+            'events': {
+                title: '📋 Экспорт журнала событий',
+                content: this.getEventsExportForm()
+            },
+            'charts': {
+                title: '📈 Экспорт графиков',
+                content: this.getChartsExportForm()
+            },
+            'report': {
+                title: '📊 Экспорт полного отчета',
+                content: this.getReportExportForm()
+            }
+        };
+
+        const data = forms[type] || forms['events'];
+        modalTitle.textContent = data.title;
+        modalContent.innerHTML = data.content;
+        modal.classList.add('active');
+
+        const confirmBtn = document.getElementById('exportConfirmBtn');
+        if (confirmBtn) confirmBtn.onclick = () => this.performExport();
+
+        if (type === 'charts') {
+            setTimeout(() => {
+                const selectAllBtn = document.getElementById('select-all-params');
+                const deselectAllBtn = document.getElementById('deselect-all-params');
+                if (selectAllBtn) selectAllBtn.onclick = () => {
+                    document.querySelectorAll('input[name="export_param"]').forEach(cb => cb.checked = true);
+                };
+                if (deselectAllBtn) deselectAllBtn.onclick = () => {
+                    document.querySelectorAll('input[name="export_param"]').forEach(cb => cb.checked = false);
+                };
+            }, 50);
+        }
+    }
+
+    getEventsExportForm() {
+        let controllerOptions = '<option value="">Все установки</option>';
+        this.controllers.forEach(ctrl => {
+            const selected = (this.currentControllerId == ctrl.id) ? 'selected' : '';
+            const displayName = this.namesCache[ctrl.id] || ctrl.name || 'ДГУ';
+            controllerOptions += `<option value="${ctrl.id}" ${selected}>${escapeHtml(displayName)}</option>`;
+        });
+
+        const maxDate = getTodayDate();
+        const defaultStartDate = this._getDateDaysAgo(7);
+        const defaultEndDate = this.currentDate;
+
+        return `
+            <div class="export-option">
+                <label>📌 Установка</label>
+                <select id="export_controller_id">${controllerOptions}</select>
+            </div>
+            <div class="export-option">
+                <label>📅 Дата начала</label>
+                <input type="date" id="export_start_date" value="${defaultStartDate}" max="${maxDate}">
+            </div>
+            <div class="export-option">
+                <label>📅 Дата окончания</label>
+                <input type="date" id="export_end_date" value="${defaultEndDate}" max="${maxDate}">
+            </div>
+            <div class="export-option">
+                <label>📄 Формат файла</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="export_format" value="csv" checked> CSV</label>
+                    <label><input type="radio" name="export_format" value="xlsx"> Excel (XLSX)</label>
+                </div>
+            </div>
+        `;
+    }
+
+    getChartsExportForm() {
+        let controllerOptions = '<option value="">🌍 Все установки</option>';
+        this.controllers.forEach(ctrl => {
+            const selected = (this.currentControllerId == ctrl.id) ? 'selected' : '';
+            const displayName = this.namesCache[ctrl.id] || ctrl.name || 'ДГУ';
+            controllerOptions += `<option value="${ctrl.id}" ${selected}>${escapeHtml(displayName)}</option>`;
+        });
+
+        const params = [
+            { id: 'temp', name: '🌡️ Температура ОЖ', checked: true },
+            { id: 'oil_pressure', name: '⚙️ Давление масла', checked: true },
+            { id: 'fuel', name: '⛽ Уровень топлива', checked: true },
+            { id: 'battery', name: '🔋 Напряжение АКБ', checked: true },
+            { id: 'f_gen', name: '⚡️ Частота генератора', checked: true },
+            { id: 'RPM', name: '🔄 Обороты', checked: true }
+        ];
+
+        let paramsHtml = `
+            <div class="flex justify-between items-center mb-2">
+                <span class="text-xs text-gray-500">Выберите параметры:</span>
+                <div class="flex gap-2">
+                    <button type="button" id="select-all-params" class="text-xs text-diesel-blue hover:underline">Выбрать все</button>
+                    <button type="button" id="deselect-all-params" class="text-xs text-gray-500 hover:underline">Снять все</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2 mb-3" id="params-container">
+                ${params.map(p => `
+                    <label class="flex items-center gap-2 text-xs">
+                        <input type="checkbox" name="export_param" value="${p.id}" ${p.checked ? 'checked' : ''}>
+                        ${p.name}
+                    </label>
+                `).join('')}
+            </div>
+        `;
+
+        return `
+            <div class="export-option">
+                <label>📌 Установка</label>
+                <select id="export_controller_id" required>${controllerOptions}</select>
+            </div>
+            <div class="export-option">
+                <label>⏱️ Период</label>
+                <select id="export_hours">
+                    <option value="6">Последние 6 часов</option>
+                    <option value="12">Последние 12 часов</option>
+                    <option value="24" selected>Последние 24 часа</option>
+                    <option value="48">Последние 48 часов</option>
+                    <option value="72">Последние 3 дня</option>
+                    <option value="168">Последние 7 дней</option>
+                </select>
+            </div>
+            <div class="export-option">${paramsHtml}</div>
+            <div class="export-option">
+                <label>📄 Тип экспорта</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="export_chart_type" value="image" checked> 📸 Сохранить как картинку (PNG)</label>
+                </div>
+                <div class="radio-group mt-2">
+                    <label><input type="radio" name="export_chart_type" value="data"> 📊 Данные в Excel</label>
+                </div>
+            </div>
+            <div class="text-xs text-blue-600 mt-2">💡 При выборе "Все установки" будут показаны графики для всех установок</div>
+        `;
+    }
+
+    getReportExportForm() {
+        let controllerOptions = '<option value="">Выберите установку</option>';
+        this.controllers.forEach(ctrl => {
+            const selected = (this.currentControllerId == ctrl.id) ? 'selected' : '';
+            const displayName = this.namesCache[ctrl.id] || ctrl.name || 'ДГУ';
+            controllerOptions += `<option value="${ctrl.id}" ${selected}>${escapeHtml(displayName)}</option>`;
+        });
+
+        const maxDate = getTodayDate();
+        const defaultStartDate = this._getDateDaysAgo(7);
+        const defaultEndDate = this.currentDate;
+
+        return `
+            <div class="export-option">
+                <label>📌 Установка *</label>
+                <select id="export_controller_id" required>${controllerOptions}</select>
+            </div>
+            <div class="export-option">
+                <label>📅 Дата начала</label>
+                <input type="date" id="export_start_date" value="${defaultStartDate}" max="${maxDate}">
+            </div>
+            <div class="export-option">
+                <label>📅 Дата окончания</label>
+                <input type="date" id="export_end_date" value="${defaultEndDate}" max="${maxDate}">
+            </div>
+            <div class="text-xs text-blue-600 mt-2">💡 Полный отчет включает: журнал событий, данные графиков, текущий статус и статистику</div>
+        `;
+    }
+
+    async performExport() {
+        if (this.exportType === 'events') {
+            const controllerId = document.getElementById('export_controller_id')?.value;
+            const format = document.querySelector('input[name="export_format"]:checked')?.value || 'csv';
+            const startDate = document.getElementById('export_start_date')?.value;
+            const endDate = document.getElementById('export_end_date')?.value;
+
+                // ----- ПРОВЕРКА ДАТ  -----
+            const maxDate = getTodayDate();
+            if (startDate && startDate > maxDate) {
+                this.showToast('Дата начала не может быть в будущем', 'error');
+                return;
+            }
+            if (endDate && endDate > maxDate) {
+                this.showToast('Дата окончания не может быть в будущем', 'error');
+                return;
+            }
+            if (startDate && endDate && startDate > endDate) {
+                this.showToast('Дата начала не может быть позже даты окончания', 'error');
+                return;
+            }
+            // ----------------------------------
+
+            let url = `/api/export/events?format=${format}`;
+            if (controllerId) url += `&controller_id=${controllerId}`;
+            if (startDate) url += `&start_date=${startDate}`;
+            if (endDate) url += `&end_date=${endDate}`;
+
+            this.showToast('Начинаю экспорт событий...', 'info');
+            await this.downloadFile(url, `events_${new Date().toISOString().slice(0, 19)}.${format}`,
+                'Экспорт событий успешно завершен', 'Ошибка при экспорте событий');
+
+        } else if (this.exportType === 'charts') {
+            const exportType = document.querySelector('input[name="export_chart_type"]:checked')?.value;
+            if (exportType === 'image') {
+                await this.exportChartAsImage();
+            } else {
+                await this.exportChartAsExcel();
+            }
+
+        } else if (this.exportType === 'report') {
+            const controllerId = document.getElementById('export_controller_id')?.value;
+            if (!controllerId) {
+                this.showToast('Пожалуйста, выберите установку', 'error');
+                return;
+            }
+            const startDate = document.getElementById('export_start_date')?.value;
+            const endDate = document.getElementById('export_end_date')?.value;
+
+            // ----- ПРОВЕРКА ДАТ (добавлено) -----
+            const maxDate = getTodayDate();
+            if (startDate && startDate > maxDate) {
+                this.showToast('Дата начала не может быть в будущем', 'error');
+                return;
+            }
+            if (endDate && endDate > maxDate) {
+                this.showToast('Дата окончания не может быть в будущем', 'error');
+                return;
+            }
+            if (startDate && endDate && startDate > endDate) {
+                this.showToast('Дата начала не может быть позже даты окончания', 'error');
+                return;
+            }
+            // ----------------------------------
+
+            let url = `/api/export/complete-report/${controllerId}`;
+            const params = new URLSearchParams();
+            if (startDate) params.append('start_date', startDate);
+            if (endDate) params.append('end_date', endDate);
+            if (params.toString()) url += `?${params.toString()}`;
+
+            const displayName = await this.getControllerDisplayName(controllerId);
+            this.showToast('Начинаю формирование полного отчета...', 'info');
+            await this.downloadFile(url,
+                `report_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}_${new Date().toISOString().slice(0, 19)}.xlsx`,
+                'Полный отчет успешно сформирован', 'Ошибка при формировании отчета');
+        }
+
+        closeExportModal();
+    }
+
+    async downloadFile(url, fileName, successMessage, errorMessage) {
+        try {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = fileName;
+            link.click();
+            URL.revokeObjectURL(link.href);
+            this.showToast(successMessage, 'success');
+        } catch (error) {
+            console.error('Ошибка:', error);
+            this.showToast(errorMessage, 'error');
+        }
+    }
+
+
+    // ==================== РЕНДЕРИНГ СТАТУСА (ЕДИНСТВЕННАЯ ВЕРСИЯ) ====================
+
     async renderPrettyStatus(data, updateTime, controllerId) {
         const s = data;
         const displayName = this.namesCache[controllerId] || s.unit_name || 'ДГУ';
+        const bitsStatus = await this.loadBitsStatus(controllerId);
 
         const formatValue = (value, unit) => {
             if (value === '—') return '—';
             return `${value} ${unit}`;
         };
-
-        const bitsStatus = await this.loadBitsStatus(controllerId);
 
         let bitsHtml = '';
         if (Object.keys(bitsStatus).length > 0) {
@@ -453,17 +1106,15 @@ class DieselMonitoring {
                     </h3>
                     <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
             `;
-
             for (const [addr, bit] of Object.entries(bitsStatus)) {
                 const isActive = bit.state === 'ВКЛ';
                 const bgClass = isActive ? 'bg-red-50' : 'bg-green-50';
                 const textClass = isActive ? 'text-red-700' : 'text-green-700';
                 const stateIcon = isActive ? '🔴' : '🟢';
-
                 bitsHtml += `
                     <div class="${bgClass} rounded-lg p-2">
                         <div class="flex items-start justify-between gap-2">
-                            <span class="text-xs font-medium ${textClass} flex-1 break-words">${this.escapeHtml(bit.name)}</span>
+                            <span class="text-xs font-medium ${textClass} flex-1 break-words">${escapeHtml(bit.name)}</span>
                             <div class="flex items-center gap-1 flex-shrink-0 mt-0.5">
                                 <span class="text-sm">${stateIcon}</span>
                                 <span class="text-xs font-mono font-bold ${textClass}">${bit.state}</span>
@@ -472,11 +1123,7 @@ class DieselMonitoring {
                     </div>
                 `;
             }
-
-            bitsHtml += `
-                    </div>
-                </div>
-            `;
+            bitsHtml += `</div></div>`;
         }
 
         return `
@@ -487,7 +1134,7 @@ class DieselMonitoring {
                         <span>🔄 Обновлено: ${updateTime} МСК</span>
                     </div>
                     <div class="font-medium bg-diesel-blue/10 text-diesel-blue px-2 py-1 rounded">
-                        ${this.escapeHtml(displayName)}
+                        ${escapeHtml(displayName)}
                     </div>
                 </div>
 
@@ -498,7 +1145,7 @@ class DieselMonitoring {
                     </div>
                     <div class="bg-gradient-to-br from-purple-50 to-purple-100/50 rounded-lg p-3 text-center">
                         <div class="text-xs text-purple-600 mb-1">Режим</div>
-                        <div class="font-bold text-purple-800">${s.general.mode}</div>
+                        <div class="font-bold text-[15px] text-purple-800">${s.general.mode}</div>
                     </div>
                     <div class="bg-gradient-to-br ${s.general.mains_ok === 1 ? 'from-green-50 to-green-100/50' : 'from-red-50 to-red-100/50'} rounded-lg p-3 text-center">
                         <div class="text-xs ${s.general.mains_ok === 1 ? 'text-green-600' : 'text-red-600'} mb-1">Сеть</div>
@@ -506,7 +1153,7 @@ class DieselMonitoring {
                     </div>
                     <div class="bg-gradient-to-br from-gray-50 to-gray-100/50 rounded-lg p-3 text-center">
                         <div class="text-xs text-gray-600 mb-1">Контакторы</div>
-                        <div class="font-bold text-gray-800">ABC: ${s.general.contacts_avs} | ABГ: ${s.general.contacts_avg}</div>
+                        <div class="font-bold text-[13px] text-gray-800">ABC: ${s.general.contacts_avs} |<br> ABГ: ${s.general.contacts_avg}</div>
                     </div>
                 </div>
 
@@ -633,234 +1280,205 @@ class DieselMonitoring {
         `;
     }
 
-    // ========== ГРАФИКИ ==========
+    // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
-    async loadParameterChart() {
-        try {
-            let controllerId = this.currentControllerId;
-            let url;
-            if (controllerId && controllerId !== '') {
-                url = `/api/parameters/history?controller_id=${controllerId}&hours=${this.chartHours}`;
-            } else {
-                url = `/api/parameters/history?hours=${this.chartHours}`;
-            }
-            console.log('Загрузка графика:', url);
+    adjustNotificationsHeight() {
+        const eventsContainer = document.getElementById('events-container');
+        const notificationsContainer = document.getElementById('notifications-container');
+        const statusContainer = document.getElementById('status-container');
+        const eventsFilter = document.getElementById('events-filter');
 
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const data = await response.json();
+        if (!eventsContainer || !notificationsContainer) return;
 
-            const ctx = document.getElementById('parameterChart')?.getContext('2d');
-            if (!ctx) return;
+        let availableHeight = window.innerHeight - 250;
 
-            if (this.chart) {
-                this.chart.destroy();
-            }
+        if (eventsFilter && this.currentTab === 'events') {
+            availableHeight -= eventsFilter.offsetHeight;
+        }
 
-            await this.updateChartHeader(controllerId, this.chartHours);
+        availableHeight = Math.max(1000, Math.min(availableHeight, 1000));
 
-            const datasets = [];
-            let allTimestamps = new Set();
-            const selectedParam = document.getElementById('parameter-select')?.value || 'temp';
-            const paramLabel = this.getParameterLabel(selectedParam);
+        notificationsContainer.style.height = `${availableHeight}px`;
 
-            if (controllerId && controllerId !== '') {
-                const paramKey = selectedParam;
-                const paramData = data[paramKey] || [];
-
-                if (paramData.length === 0) {
-                    this.showNoDataChart(ctx, `Нет данных по параметру ${paramLabel}`);
-                    return;
-                }
-
-                paramData.forEach(d => allTimestamps.add(d.ts));
-
-                datasets.push({
-                    label: paramLabel,
-                    data: paramData.map(d => ({ x: d.ts, y: d.value })),
-                    borderColor: this.colors[0],
-                    backgroundColor: this.colors[0] + '20',
-                    borderWidth: 2,
-                    pointRadius: 3,
-                    pointHoverRadius: 6,
-                    pointBackgroundColor: this.colors[0],
-                    pointBorderColor: '#002f87',
-                    pointBorderWidth: 1.5,
-                    tension: 0.3,
-                    fill: false
-                });
-            } else {
-                let colorIndex = 0;
-                let hasData = false;
-                const paramPrefix = selectedParam + '_ctrl_';
-
-                for (const [key, value] of Object.entries(data)) {
-                    if (!key.startsWith(paramPrefix) && key !== selectedParam) {
-                        continue;
-                    }
-
-                    const paramData = value.data || [];
-                    if (paramData.length === 0) continue;
-
-                    hasData = true;
-                    paramData.forEach(d => allTimestamps.add(d.ts));
-
-                    const controllerName = value.name || `Установка ${value.controller_id}`;
-
-                    datasets.push({
-                        label: controllerName,
-                        data: paramData.map(d => ({ x: d.ts, y: d.value })),
-                        borderColor: this.colors[colorIndex % this.colors.length],
-                        backgroundColor: this.colors[colorIndex % this.colors.length] + '20',
-                        borderWidth: 2,
-                        pointRadius: 2,
-                        pointHoverRadius: 5,
-                        pointBackgroundColor: this.colors[colorIndex % this.colors.length],
-                        pointBorderColor: '#002f87',
-                        pointBorderWidth: 1,
-                        tension: 0.3,
-                        fill: false
-                    });
-                    colorIndex++;
-                }
-
-                if (!hasData) {
-                    this.showNoDataChart(ctx, `Нет данных по параметру ${paramLabel} ни для одной установки`);
-                    return;
-                }
-            }
-
-            if (datasets.length === 0) {
-                this.showNoDataChart(ctx, 'Нет данных для отображения');
-                return;
-            }
-
-            const sortedTimestamps = Array.from(allTimestamps).sort((a, b) => a - b);
-            const labels = sortedTimestamps.map(ts => this.formatXAxisLabel(ts, this.chartHours));
-
-            datasets.forEach(dataset => {
-                const dataMap = new Map(dataset.data.map(d => [d.x, d.y]));
-                dataset.data = sortedTimestamps.map(ts => dataMap.get(ts) || null);
-            });
-
-            this.chart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: labels,
-                    datasets: datasets
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    interaction: {
-                        mode: 'index',
-                        intersect: false,
-                    },
-                    plugins: {
-                        legend: {
-                            display: true,
-                            position: 'top',
-                            labels: { font: { size: 10 } }
-                        },
-                        tooltip: {
-                            backgroundColor: '#1f2937',
-                            titleColor: '#ffffff',
-                            bodyColor: '#e5e7eb',
-                            borderColor: '#002f87',
-                            borderWidth: 1,
-                            callbacks: {
-                                title: (tooltipItems) => {
-                                    const index = tooltipItems[0].dataIndex;
-                                    const ts = sortedTimestamps[index];
-                                    if (ts) {
-                                        return `📅 ${this.formatDateTimeForTooltip(ts, this.chartHours)}`;
-                                    }
-                                    return tooltipItems[0].label;
-                                }
-                            }
-                        },
-                        zoom: {
-                            zoom: {
-                                wheel: {
-                                    enabled: true,
-                                    speed: 0.05
-                                },
-                                pinch: {
-                                    enabled: true
-                                },
-                                mode: 'x',
-                                drag: false
-                            },
-                            pan: {
-                                enabled: true,
-                                mode: 'x',
-                                speed: 5
-                            },
-                            limits: {
-                                x: { min: 'original', max: 'original' }
-                            }
-                        }
-                    },
-                    scales: {
-                        y: {
-                            grid: { color: '#e5e7eb' },
-                            ticks: { color: '#6b7280', font: { size: 10 } },
-                            title: { display: true, text: this.getParameterUnit(selectedParam), font: { size: 9 } }
-                        },
-                        x: {
-                            grid: { display: false },
-                            ticks: {
-                                color: '#6b7280',
-                                font: { size: 9 },
-                                maxRotation: 45,
-                                minRotation: 45,
-                                autoSkip: true,
-                                maxTicksLimit: 12
-                            }
-                        }
-                    }
-                }
-            });
-
-        } catch (error) {
-            console.error('Ошибка загрузки графика:', error);
-            const ctx = document.getElementById('parameterChart')?.getContext('2d');
-            if (ctx) {
-                this.showNoDataChart(ctx, 'Ошибка загрузки данных');
+        if (statusContainer) {
+            statusContainer.style.height = `${availableHeight + 30}px`;
+            const statusContent = document.getElementById('status-content');
+            if (statusContent) {
+                statusContent.style.height = `${availableHeight + 30}px`;
             }
         }
     }
 
-    async updateChartHeader(controllerId, hours) {
-        const headerContainer = document.getElementById('chart-header');
-        if (!headerContainer) return;
-
-        let displayName = '';
-        if (controllerId) {
-            displayName = await this.getControllerDisplayName(controllerId);
-        } else {
-            displayName = 'Все установки';
-        }
-
-        let periodText = '';
-        if (hours < 24 || hours > 24) {
-            periodText = `Последние ${hours} часов`;
-        } else if (hours === 24) {
-            periodText = `Последние ${hours} часа`;
-        } else {
-            periodText = `Последние ${hours / 24} дней`;
-        }
-
-        headerContainer.innerHTML = `
-            <div class="flex justify-between items-center flex-wrap gap-2">
-                <div>
-                    <span class="font-semibold text-diesel-blue">📈 Параметры</span>
-                    <span class="text-gray-500 text-sm ml-1">${this.escapeHtml(displayName)}</span>
-                </div>
-                <div class="text-xs text-gray-400">📅 ${periodText}</div>
-            </div>
-        `;
+    updateClock() {
+        const mskNow = getMskTime();
+        const timeString = mskNow.toLocaleTimeString('ru-RU');
+        const timeSmall = document.getElementById('current-time-small');
+        if (timeSmall) timeSmall.textContent = timeString;
     }
+
+    showToast(message, type = 'info') {
+        let toastContainer = document.getElementById('toast-container');
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            toastContainer.style.cssText = `
+                position: fixed; bottom: 1rem; right: 1rem; z-index: 50;
+                display: flex; flex-direction: column; gap: 0.5rem;
+            `;
+            document.body.appendChild(toastContainer);
+        }
+
+        const toast = document.createElement('div');
+        toast.className = `px-4 py-2 rounded-lg shadow-lg text-white text-sm ${
+            type === 'error' ? 'bg-red-600' : 'bg-green-600'
+        }`;
+        toast.style.cssText = 'opacity: 0; transform: translateX(100%); transition: all 0.3s ease;';
+        toast.textContent = message;
+
+        toastContainer.appendChild(toast);
+        requestAnimationFrame(() => {
+            toast.style.opacity = '1';
+            toast.style.transform = 'translateX(0)';
+        });
+
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateX(100%)';
+            setTimeout(() => {
+                if (toast.parentNode) toast.parentNode.removeChild(toast);
+                if (toastContainer.children.length === 0) toastContainer.remove();
+            }, 300);
+        }, 3000);
+    }
+
+    // ==================== НАСТРОЙКА СОБЫТИЙ ====================
+
+    setupEventListeners() {
+        const filterSelect = document.getElementById('controller-filter');
+        if (filterSelect) {
+            filterSelect.addEventListener('change', (e) => {
+                this.currentControllerId = e.target.value;
+                console.log('📌 Смена установки на:', this.currentControllerId || 'Все установки');
+                this.loadNotifications();
+                this.loadParameterChart();
+                this.loadCurrentStatus();
+                this.loadCurrentAlerts();
+                this.adjustNotificationsHeight();
+            });
+        }
+
+        const dateFilter = document.getElementById('date-filter');
+        if (dateFilter) {
+            dateFilter.value = this.currentDate;
+            dateFilter.max = getTodayDate();
+            dateFilter.onchange = (e) => {
+                this.currentDate = e.target.value;
+                this.loadNotifications();
+            };
+        }
+
+        const chartPeriodSelect = document.getElementById('chart-period-select');
+        if (chartPeriodSelect) {
+            chartPeriodSelect.addEventListener('change', (e) => {
+                this.chartHours = parseInt(e.target.value);
+                this.loadParameterChart();
+            });
+        }
+
+        const paramSelect = document.getElementById('parameter-select');
+        if (paramSelect) {
+            paramSelect.addEventListener('change', () => this.loadParameterChart());
+        }
+
+        const exportEventsBtn = document.getElementById('export-events-btn');
+        if (exportEventsBtn) exportEventsBtn.onclick = () => this.showExportModal('events');
+
+        const exportChartsBtn = document.getElementById('export-charts-btn');
+        if (exportChartsBtn) exportChartsBtn.onclick = () => this.showExportModal('charts');
+
+        const exportReportBtn = document.getElementById('export-full-report-btn');
+        if (exportReportBtn) exportReportBtn.onclick = () => this.showExportModal('report');
+
+        const todayBtn = document.getElementById('today-btn');
+        if (todayBtn) {
+            todayBtn.onclick = () => {
+                this.currentDate = getTodayDate();
+                const df = document.getElementById('date-filter');
+                if (df) df.value = this.currentDate;
+                this.loadNotifications();
+            };
+        }
+
+        // Вкладки
+        const tabEvents = document.getElementById('tab-events');
+        const tabStatus = document.getElementById('tab-status');
+        const eventsContainer = document.getElementById('events-container');
+        const statusContainer = document.getElementById('status-container');
+        const eventsFilter = document.getElementById('events-filter');
+
+        if (tabEvents && tabStatus) {
+            tabEvents.onclick = () => {
+                tabEvents.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-diesel-blue text-diesel-blue';
+                tabStatus.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-transparent text-gray-500';
+                eventsContainer.classList.remove('hidden');
+                statusContainer.classList.add('hidden');
+                if (eventsFilter) eventsFilter.classList.remove('hidden');
+                this.currentTab = 'events';
+                this.adjustNotificationsHeight();
+            };
+
+            tabStatus.onclick = () => {
+                tabStatus.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-diesel-blue text-diesel-blue';
+                tabEvents.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-transparent text-gray-500';
+                eventsContainer.classList.add('hidden');
+                statusContainer.classList.remove('hidden');
+                if (eventsFilter) eventsFilter.classList.add('hidden');
+                this.currentTab = 'status';
+                this.loadCurrentStatus();
+            };
+        }
+
+        // Чат
+        const sendBtn = document.getElementById('send-message');
+        const chatInput = document.getElementById('chat-input');
+        if (sendBtn && chatInput) {
+            sendBtn.onclick = () => this.sendMessage();
+            chatInput.onkeypress = (e) => { if (e.key === 'Enter') this.sendMessage(); };
+        }
+
+        // Кнопка заявки
+        const orderBtn = document.getElementById('order-button');
+        if (orderBtn) orderBtn.onclick = () => window.open('https://www.comd.ru', '_blank');
+
+        // Экспорт актов
+        const exportBtn = document.getElementById('export-act-btn');
+        const exportMenu = document.getElementById('export-act-menu');
+        if (exportBtn && exportMenu) {
+            exportBtn.onclick = (e) => {
+                e.stopPropagation();
+                exportMenu.classList.toggle('hidden');
+            };
+            document.addEventListener('click', () => exportMenu.classList.add('hidden'));
+        }
+
+        const serviceBtn = document.getElementById('export-act-service');
+        const claimBtn = document.getElementById('export-act-claim');
+        const workBtn = document.getElementById('export-work-order');
+        if (serviceBtn) serviceBtn.onclick = () => this.generateServiceAct('service');
+        if (claimBtn) claimBtn.onclick = () => this.generateServiceAct('claim');
+        if (workBtn) workBtn.onclick = () => this.generateServiceAct('work_order');
+    }
+
+    // ==================== ПРИВАТНЫЕ МЕТОДЫ ====================
+
+    _getDateDaysAgo(days) {
+        const mskNow = getMskTime();
+        const date = new Date(mskNow);
+        date.setDate(date.getDate() - days);
+        return date.toISOString().split('T')[0];
+    }
+
+        // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ДЛЯ ГРАФИКОВ ====================
 
     getParameterLabel(param) {
         const labels = {
@@ -868,7 +1486,7 @@ class DieselMonitoring {
             'oil_pressure': 'Давление масла',
             'fuel': 'Уровень топлива',
             'battery': 'Напряжение АКБ',
-            'frequency': 'Частота сети',
+            'f_gen': 'Частота генератора',
             'RPM': 'Обороты'
         };
         return labels[param] || param;
@@ -880,24 +1498,13 @@ class DieselMonitoring {
             'oil_pressure': 'Бар',
             'fuel': '%',
             'battery': 'В',
-            'frequency': 'Гц',
+            'f_gen': 'Гц',
             'RPM': 'об/мин'
         };
         return units[param] || '';
     }
 
-    showNoDataChart(ctx, message = 'Нет данных за период') {
-        if (this.chart) {
-            this.chart.destroy();
-        }
-        this.chart = new Chart(ctx, {
-            type: 'line',
-            data: { labels: ['Нет данных'], datasets: [{ label: message, data: [null], borderColor: '#9ca3af', borderDash: [5, 5] }] },
-            options: { responsive: true, plugins: { legend: { display: true } } }
-        });
-    }
-
-    // ========== ЭКСПОРТ ==========
+        // ==================== ЭКСПОРТ ГРАФИКОВ В PNG ====================
 
     async exportChartAsImage() {
         let controllerId = document.getElementById('export_controller_id')?.value;
@@ -911,7 +1518,7 @@ class DieselMonitoring {
         }
 
         const hours = parseInt(document.getElementById('export_hours')?.value || 24);
-        const mskNow = this.getMskTime();
+        const mskNow = getMskTime();
         const date = mskNow.toLocaleDateString('ru-RU').replace(/\./g, '-');
 
         this.showToast(`Загрузка ${selectedParams.length} графиков...`, 'info');
@@ -1328,769 +1935,20 @@ class DieselMonitoring {
             this.showToast(`Экспорт ${selectedParams.length} параметров в Excel завершен`, 'success');
         }, 1000);
     }
-
-    showExportModal(type) {
-        this.exportType = type;
-        const modal = document.getElementById('exportModal');
-        const modalTitle = document.getElementById('modalTitle');
-        const modalContent = document.getElementById('modalContent');
-
-        if (!modal || !modalContent) return;
-
-        let title = '';
-        let content = '';
-
-        if (type === 'events') {
-            title = '📋 Экспорт журнала событий';
-            content = this.getEventsExportForm();
-        } else if (type === 'charts') {
-            title = '📈 Экспорт графиков';
-            content = this.getChartsExportForm();
-        } else if (type === 'report') {
-            title = '📊 Экспорт полного отчета';
-            content = this.getReportExportForm();
-        }
-
-        modalTitle.textContent = title;
-        modalContent.innerHTML = content;
-        modal.classList.add('active');
-
-        const confirmBtn = document.getElementById('exportConfirmBtn');
-        if (confirmBtn) {
-            confirmBtn.onclick = () => this.performExport();
-        }
-
-        if (type === 'charts') {
-            setTimeout(() => {
-                const selectAllBtn = document.getElementById('select-all-params');
-                const deselectAllBtn = document.getElementById('deselect-all-params');
-
-                if (selectAllBtn) {
-                    selectAllBtn.onclick = () => {
-                        document.querySelectorAll('input[name="export_param"]').forEach(cb => cb.checked = true);
-                    };
-                }
-                if (deselectAllBtn) {
-                    deselectAllBtn.onclick = () => {
-                        document.querySelectorAll('input[name="export_param"]').forEach(cb => cb.checked = false);
-                    };
-                }
-            }, 50);
-        }
-    }
-
-    getEventsExportForm() {
-        let controllerOptions = '<option value="">Все установки</option>';
-        this.controllers.forEach(ctrl => {
-            const selected = (this.currentControllerId == ctrl.id) ? 'selected' : '';
-            const displayName = this.namesCache[ctrl.id] || ctrl.name || 'ДГУ';
-            controllerOptions += `<option value="${ctrl.id}" ${selected}>${this.escapeHtml(displayName)}</option>`;
-        });
-
-        const maxDate = this.getMaxDate();
-        const defaultStartDate = this.getDateDaysAgo(7);
-        const defaultEndDate = this.currentDate;
-
-        return `
-            <div class="export-option">
-                <label>📌 Установка</label>
-                <select id="export_controller_id">
-                    ${controllerOptions}
-                </select>
-            </div>
-            <div class="export-option">
-                <label>📅 Дата начала</label>
-                <input type="date" id="export_start_date" value="${defaultStartDate}" max="${maxDate}">
-            </div>
-            <div class="export-option">
-                <label>📅 Дата окончания</label>
-                <input type="date" id="export_end_date" value="${defaultEndDate}" max="${maxDate}">
-            </div>
-            <div class="export-option">
-                <label>📄 Формат файла</label>
-                <div class="radio-group">
-                    <label><input type="radio" name="export_format" value="csv" checked> CSV</label>
-                    <label><input type="radio" name="export_format" value="xlsx"> Excel (XLSX)</label>
-                </div>
-            </div>
-        `;
-    }
-
-    getChartsExportForm() {
-        let controllerOptions = '<option value="">🌍 Все установки</option>';
-        this.controllers.forEach(ctrl => {
-            const selected = (this.currentControllerId == ctrl.id) ? 'selected' : '';
-            const displayName = this.namesCache[ctrl.id] || ctrl.name || 'ДГУ';
-            controllerOptions += `<option value="${ctrl.id}" ${selected}>${this.escapeHtml(displayName)}</option>`;
-        });
-
-        const parameters = [
-            { id: 'temp', name: '🌡️ Температура ОЖ', checked: true },
-            { id: 'oil_pressure', name: '⚙️ Давление масла', checked: true },
-            { id: 'fuel', name: '⛽ Уровень топлива', checked: true },
-            { id: 'battery', name: '🔋 Напряжение АКБ', checked: true },
-            { id: 'frequency', name: '📡 Частота сети', checked: true },
-            { id: 'RPM', name: '🔄 Обороты', checked: true }
-        ];
-
-        let paramsHtml = '<div class="flex justify-between items-center mb-2">';
-        paramsHtml += '<span class="text-xs text-gray-500">Выберите параметры:</span>';
-        paramsHtml += '<div class="flex gap-2">';
-        paramsHtml += '<button type="button" id="select-all-params" class="text-xs text-diesel-blue hover:underline">Выбрать все</button>';
-        paramsHtml += '<button type="button" id="deselect-all-params" class="text-xs text-gray-500 hover:underline">Снять все</button>';
-        paramsHtml += '</div></div>';
-        paramsHtml += '<div class="grid grid-cols-2 gap-2 mb-3" id="params-container">';
-        parameters.forEach(param => {
-            paramsHtml += `
-                <label class="flex items-center gap-2 text-xs">
-                    <input type="checkbox" name="export_param" value="${param.id}" ${param.checked ? 'checked' : ''}>
-                    ${param.name}
-                </label>
-            `;
-        });
-        paramsHtml += '</div>';
-
-        return `
-            <div class="export-option">
-                <label>📌 Установка</label>
-                <select id="export_controller_id" required>
-                    ${controllerOptions}
-                </select>
-            </div>
-            <div class="export-option">
-                <label>⏱️ Период</label>
-                <select id="export_hours">
-                    <option value="6">Последние 6 часов</option>
-                    <option value="12">Последние 12 часов</option>
-                    <option value="24" selected>Последние 24 часа</option>
-                    <option value="48">Последние 48 часов</option>
-                    <option value="72">Последние 3 дня</option>
-                    <option value="168">Последние 7 дней</option>
-                </select>
-            </div>
-            <div class="export-option">
-                ${paramsHtml}
-            </div>
-            <div class="export-option">
-                <label>📄 Тип экспорта</label>
-                <div class="radio-group">
-                    <label><input type="radio" name="export_chart_type" value="image" checked> 📸 Сохранить как картинку (PNG)</label>
-                </div>
-                <div class="radio-group mt-2">
-                    <label><input type="radio" name="export_chart_type" value="data"> 📊 Данные в Excel</label>
-                </div>
-            </div>
-            <div class="text-xs text-blue-600 mt-2">💡 При выборе "Все установки" будут показаны графики для всех установок</div>
-        `;
-    }
-
-    getReportExportForm() {
-        let controllerOptions = '<option value="">Выберите установку</option>';
-        this.controllers.forEach(ctrl => {
-            const selected = (this.currentControllerId == ctrl.id) ? 'selected' : '';
-            const displayName = this.namesCache[ctrl.id] || ctrl.name || 'ДГУ';
-            controllerOptions += `<option value="${ctrl.id}" ${selected}>${this.escapeHtml(displayName)}</option>`;
-        });
-
-        const maxDate = this.getMaxDate();
-        const defaultStartDate = this.getDateDaysAgo(7);
-        const defaultEndDate = this.currentDate;
-
-        return `
-            <div class="export-option">
-                <label>📌 Установка *</label>
-                <select id="export_controller_id" required>
-                    ${controllerOptions}
-                </select>
-            </div>
-            <div class="export-option">
-                <label>📅 Дата начала</label>
-                <input type="date" id="export_start_date" value="${defaultStartDate}" max="${maxDate}">
-            </div>
-            <div class="export-option">
-                <label>📅 Дата окончания</label>
-                <input type="date" id="export_end_date" value="${defaultEndDate}" max="${maxDate}">
-            </div>
-            <div class="text-xs text-blue-600 mt-2">💡 Полный отчет включает: журнал событий, данные графиков, текущий статус и статистику</div>
-        `;
-    }
-
-    getDateDaysAgo(days) {
-        const mskNow = this.getMskTime();
-        const date = new Date(mskNow);
-        date.setDate(date.getDate() - days);
-        return date.toISOString().split('T')[0];
-    }
-
-    async downloadFile(url, fileName, successMessage, errorMessage) {
-        try {
-            const response = await fetch(url);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const blob = await response.blob();
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = fileName;
-            link.click();
-            URL.revokeObjectURL(link.href);
-
-            this.showToast(successMessage, 'success');
-        } catch (error) {
-            console.error('Ошибка:', error);
-            this.showToast(errorMessage, 'error');
-        }
-    }
-
-    async performExport() {
-        if (this.exportType === 'events') {
-            const controllerId = document.getElementById('export_controller_id')?.value;
-            const format = document.querySelector('input[name="export_format"]:checked')?.value || 'csv';
-            const startDate = document.getElementById('export_start_date')?.value;
-            const endDate = document.getElementById('export_end_date')?.value;
-
-            // Валидация дат
-            const maxDate = this.getMaxDate();
-            if (startDate && startDate > maxDate) {
-                this.showToast('Дата начала не может быть в будущем', 'error');
-                return;
-            }
-            if (endDate && endDate > maxDate) {
-                this.showToast('Дата окончания не может быть в будущем', 'error');
-                return;
-            }
-            if (startDate && endDate && startDate > endDate) {
-                this.showToast('Дата начала не может быть позже даты окончания', 'error');
-                return;
-            }
-
-            let url = `/api/export/events?format=${format}`;
-            if (controllerId) url += `&controller_id=${controllerId}`;
-            if (startDate) url += `&start_date=${startDate}`;
-            if (endDate) url += `&end_date=${endDate}`;
-
-            this.showToast('Начинаю экспорт событий...', 'info');
-
-            await this.downloadFile(
-                url,
-                `events_${new Date().toISOString().slice(0, 19)}.${format}`,
-                'Экспорт событий успешно завершен',
-                'Ошибка при экспорте событий'
-            );
-
-        } else if (this.exportType === 'charts') {
-            const exportType = document.querySelector('input[name="export_chart_type"]:checked')?.value;
-            if (exportType === 'image') {
-                await this.exportChartAsImage();
-            } else {
-                await this.exportChartAsExcel();
-            }
-
-        } else if (this.exportType === 'report') {
-            const controllerId = document.getElementById('export_controller_id')?.value;
-            if (!controllerId) {
-                this.showToast('Пожалуйста, выберите установку', 'error');
-                return;
-            }
-            const startDate = document.getElementById('export_start_date')?.value;
-            const endDate = document.getElementById('export_end_date')?.value;
-
-            // Валидация дат
-            const maxDate = this.getMaxDate();
-            if (startDate && startDate > maxDate) {
-                this.showToast('Дата начала не может быть в будущем', 'error');
-                return;
-            }
-            if (endDate && endDate > maxDate) {
-                this.showToast('Дата окончания не может быть в будущем', 'error');
-                return;
-            }
-            if (startDate && endDate && startDate > endDate) {
-                this.showToast('Дата начала не может быть позже даты окончания', 'error');
-                return;
-            }
-
-            let url = `/api/export/complete-report/${controllerId}`;
-            const params = new URLSearchParams();
-            if (startDate) params.append('start_date', startDate);
-            if (endDate) params.append('end_date', endDate);
-            if (params.toString()) url += `?${params.toString()}`;
-
-            const displayName = await this.getControllerDisplayName(controllerId);
-
-            this.showToast('Начинаю формирование полного отчета...', 'info');
-
-            await this.downloadFile(
-                url,
-                `report_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}_${new Date().toISOString().slice(0, 19)}.xlsx`,
-                'Полный отчет успешно сформирован',
-                'Ошибка при формировании отчета'
-            );
-        }
-
-        closeExportModal();
-    }
-
-    showToast(message, type = 'info') {
-        let toastContainer = document.getElementById('toast-container');
-        if (!toastContainer) {
-            toastContainer = document.createElement('div');
-            toastContainer.id = 'toast-container';
-            toastContainer.style.cssText = `
-                position: fixed;
-                bottom: 1rem;
-                right: 1rem;
-                z-index: 50;
-                display: flex;
-                flex-direction: column;
-                gap: 0.5rem;
-            `;
-            document.body.appendChild(toastContainer);
-        }
-
-        const toast = document.createElement('div');
-        toast.className = `px-4 py-2 rounded-lg shadow-lg text-white text-sm ${
-            type === 'error' ? 'bg-red-600' : 'bg-green-600'
-        }`;
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(100%)';
-        toast.style.transition = 'all 0.3s ease';
-        toast.textContent = message;
-
-        toastContainer.appendChild(toast);
-
-        setTimeout(() => {
-            toast.style.opacity = '1';
-            toast.style.transform = 'translateX(0)';
-        }, 10);
-
-        setTimeout(() => {
-            toast.style.opacity = '0';
-            toast.style.transform = 'translateX(100%)';
-            setTimeout(() => {
-                if (toast.parentNode) {
-                    toast.parentNode.removeChild(toast);
-                }
-                if (toastContainer.children.length === 0) {
-                    toastContainer.remove();
-                }
-            }, 300);
-        }, 3000);
-    }
-
-    setupEventListeners() {
-        const filterSelect = document.getElementById('controller-filter');
-        if (filterSelect) {
-            filterSelect.addEventListener('change', (e) => {
-                this.currentControllerId = e.target.value;
-                console.log('📌 Смена установки на:', this.currentControllerId || 'Все установки');
-                this.loadNotifications();
-                this.loadParameterChart();
-                this.loadCurrentStatus();
-                this.loadCurrentAlerts();
-                this.adjustNotificationsHeight();
-            });
-        }
-
-        const dateFilter = document.getElementById('date-filter');
-        if (dateFilter) {
-            dateFilter.value = this.currentDate;
-            dateFilter.max = this.getMaxDate();
-            dateFilter.onchange = (e) => {
-                this.currentDate = e.target.value;
-                this.loadNotifications();
-            };
-        }
-
-        const chartPeriodSelect = document.getElementById('chart-period-select');
-        if (chartPeriodSelect) {
-            chartPeriodSelect.addEventListener('change', (e) => {
-                this.chartHours = parseInt(e.target.value);
-                this.loadParameterChart();
-            });
-        }
-
-        const paramSelect = document.getElementById('parameter-select');
-        if (paramSelect) {
-            paramSelect.addEventListener('change', () => this.loadParameterChart());
-        }
-
-        const exportEventsBtn = document.getElementById('export-events-btn');
-        if (exportEventsBtn) exportEventsBtn.onclick = () => this.showExportModal('events');
-
-        const exportChartsBtn = document.getElementById('export-charts-btn');
-        if (exportChartsBtn) exportChartsBtn.onclick = () => this.showExportModal('charts');
-
-        const exportReportBtn = document.getElementById('export-full-report-btn');
-        if (exportReportBtn) exportReportBtn.onclick = () => this.showExportModal('report');
-
-        const todayBtn = document.getElementById('today-btn');
-        if (todayBtn) {
-            todayBtn.onclick = () => {
-                this.currentDate = this.getTodayDate();
-                const df = document.getElementById('date-filter');
-                if (df) df.value = this.currentDate;
-                this.loadNotifications();
-            };
-        }
-
-        const tabEvents = document.getElementById('tab-events');
-        const tabStatus = document.getElementById('tab-status');
-        const eventsContainer = document.getElementById('events-container');
-        const statusContainer = document.getElementById('status-container');
-        const eventsFilter = document.getElementById('events-filter');
-
-        if (tabEvents && tabStatus) {
-            tabEvents.onclick = () => {
-                tabEvents.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-diesel-blue text-diesel-blue';
-                tabStatus.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-transparent text-gray-500';
-                eventsContainer.classList.remove('hidden');
-                statusContainer.classList.add('hidden');
-                if (eventsFilter) eventsFilter.classList.remove('hidden');
-                this.currentTab = 'events';
-                this.adjustNotificationsHeight();
-            };
-
-            tabStatus.onclick = () => {
-                tabStatus.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-diesel-blue text-diesel-blue';
-                tabEvents.className = 'flex-1 px-5 py-3 text-sm font-medium transition-colors border-b-2 border-transparent text-gray-500';
-                eventsContainer.classList.add('hidden');
-                statusContainer.classList.remove('hidden');
-                if (eventsFilter) eventsFilter.classList.add('hidden');
-                this.currentTab = 'status';
-                this.loadCurrentStatus();
-            };
-        }
-
-        const exportActBtn = document.getElementById('export-act');
-        if (exportActBtn) exportActBtn.onclick = () => this.generateServiceAct();
-
-        const sendBtn = document.getElementById('send-message');
-        const chatInput = document.getElementById('chat-input');
-        if (sendBtn && chatInput) {
-            sendBtn.onclick = () => this.sendMessage();
-            chatInput.onkeypress = (e) => { if (e.key === 'Enter') this.sendMessage(); };
-        }
-
-        const orderBtn = document.getElementById('order-button');
-        if (orderBtn) orderBtn.onclick = () => window.open('https://www.comd.ru', '_blank');
-    }
-
-
-
-async sendMessage() {
-        const input = document.getElementById('chat-input');
-        const question = input.value.trim();
-
-        if (!question) return;
-
-        // Отображаем вопрос пользователя
-        this.addChatMessage(question, 'user');
-        input.value = '';
-
-        // Показываем индикатор загрузки
-        this.showTypingIndicator();
-
-        // Получаем текущие данные установки
-        const monitoringData = await this.getLLMMonitoringData();
-
-        try {
-            const response = await fetch('/api/llm/ask', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    question: question,
-                    monitoring_data: monitoringData
-                })
-            });
-
-            const result = await response.json();
-
-            // Убираем индикатор загрузки
-            this.hideTypingIndicator();
-
-            if (result.success) {
-                this.addChatMessage(result.answer, 'assistant');
-
-                if (result.sources && result.sources.length > 0) {
-                    this.showSources(result.sources);
-                }
-            } else {
-                this.addChatMessage(result.answer, 'assistant');
-            }
-        } catch (error) {
-            this.hideTypingIndicator();
-            this.addChatMessage('❌ Ошибка подключения к AI помощнику. Проверьте, что сервер запущен.', 'assistant');
-            console.error('LLM error:', error);
-        }
-    }
-
-    async getLLMMonitoringData() {
-        let controllerId = this.currentControllerId;
-
-        if (!controllerId && this.controllers.length > 0) {
-            controllerId = this.controllers[0].id;
-        }
-
-        if (!controllerId) return {};
-
-        try {
-            const response = await fetch(`/api/status/${controllerId}`);
-            const data = await response.json();
-
-            if (data.status_data) {
-                const s = data.status_data;
-                return {
-                    unit_name: s.unit_name,
-                    rpm: s.engine?.rpm !== '—' ? parseFloat(s.engine.rpm) : null,
-                    temp: s.sensors?.temp !== '—' ? parseFloat(s.sensors.temp) : null,
-                    oil: s.sensors?.oil !== '—' ? parseFloat(s.sensors.oil) : null,
-                    battery: s.sensors?.battery !== '—' ? parseFloat(s.sensors.battery) : null,
-                    fuel: s.sensors?.fuel !== '—' ? parseFloat(s.sensors.fuel) : null,
-                    mode: s.general?.mains_state || 'НОРМАЛЬНЫЙ'
-                };
-            }
-            return {};
-        } catch (error) {
-            console.error('Ошибка получения данных для LLM:', error);
-            return {};
-        }
-    }
-
-    addChatMessage(text, role) {
-        const container = document.getElementById('chat-messages');
-        if (!container) return;
-
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `chat-message p-2 rounded-lg text-xs mb-1 ${
-            role === 'user'
-                ? 'bg-diesel-blue text-white ml-4'
-                : 'bg-gray-100 text-gray-700 mr-4'
-        }`;
-        // Добавляем перенос длинных строк
-        messageDiv.innerHTML = this.formatLLMMessage(this.wrapText(text, 60));
-        container.appendChild(messageDiv);
-        container.scrollTop = container.scrollHeight;
-    }
-
-    wrapText(text, maxLength = 60) {
-        if (!text) return '';
-
-        const lines = [];
-        let currentLine = '';
-        const words = text.split(' ');
-
-        for (const word of words) {
-            if (word.length > maxLength) {
-                if (currentLine.trim()) {
-                    lines.push(currentLine.trim());
-                    currentLine = '';
-                }
-                for (let i = 0; i < word.length; i += maxLength) {
-                    lines.push(word.slice(i, i + maxLength));
-                }
-            } else if ((currentLine + ' ' + word).length > maxLength) {
-                if (currentLine.trim()) {
-                    lines.push(currentLine.trim());
-                }
-                currentLine = word;
-            } else {
-                currentLine += (currentLine ? ' ' : '') + word;
-            }
-        }
-
-        if (currentLine.trim()) {
-            lines.push(currentLine.trim());
-        }
-
-        return lines.join('<br>');
-    }
-
-    // Получение истории диалога
-    getConversationHistory() {
-        const container = document.getElementById('chat-messages');
-        if (!container) return [];
-
-        const messages = [];
-        const messageDivs = container.querySelectorAll('.chat-message');
-
-        messageDivs.forEach(div => {
-            const isUser = div.classList.contains('bg-diesel-blue');
-            const text = div.innerText || div.textContent;
-
-            if (text.includes('Агент думает') || text.includes('готов отвечать')) {
-                return;
-            }
-
-            messages.push({
-                role: isUser ? 'user' : 'assistant',
-                text: text
-            });
-        });
-
-        return messages;
-    }
-
-    // Генерация акта
-    async generateServiceAct(type = 'service') {
-        try {
-            const displayName = await this.getControllerDisplayName(this.currentControllerId);
-
-            const monitoringData = await this.getLLMMonitoringData();
-            const conversationHistory = this.getConversationHistory();
-
-            let endpoint = '/api/generate-report';
-            let fileName = '';
-
-            if (type === 'service') {
-                fileName = `Акт_обслуживания_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}.docx`;
-            } else if (type === 'claim') {
-                fileName = `Акт_Заявка_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}.docx`;
-            } else {
-                fileName = `Заказ_наряд_${displayName.replace(/[^a-zа-яё0-9]/gi, '_')}.docx`;
-            }
-
-            const response = await fetch(endpoint, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    report_type: type,
-                    monitoring_data: monitoringData,
-                    conversation_history: conversationHistory,
-                    controller_id: this.currentControllerId
-                })
-            });
-
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = fileName;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-
-            this.showToast(`✅ ${fileName} сформирован`, 'success');
-
-        } catch (error) {
-            console.error('Ошибка:', error);
-            this.showToast('❌ Ошибка при формировании акта', 'error');
-        }
-    }
-
-    // Инициализация выпадающего меню
-    initDropdowns() {
-        const exportBtn = document.getElementById('export-act-btn');
-        const exportMenu = document.getElementById('export-act-menu');
-
-        if (exportBtn && exportMenu) {
-            exportBtn.onclick = (e) => {
-                e.stopPropagation();
-                exportMenu.classList.toggle('hidden');
-            };
-
-            document.addEventListener('click', () => {
-                exportMenu.classList.add('hidden');
-            });
-        }
-
-        const serviceBtn = document.getElementById('export-act-service');
-        const claimBtn = document.getElementById('export-act-claim');
-        const workBtn = document.getElementById('export-work-order');
-
-        if (serviceBtn) serviceBtn.onclick = () => this.generateServiceAct('service');
-        if (claimBtn) claimBtn.onclick = () => this.generateServiceAct('claim');
-        if (workBtn) workBtn.onclick = () => this.generateServiceAct('work_order');
-    }
-
-    formatLLMMessage(text) {
-        let html = this.escapeHtml(text);
-        // Жирный текст
-        html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        // Курсив
-        html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
-        // Списки
-        html = html.replace(/^• /gm, '<br>• ');
-        html = html.replace(/^- /gm, '<br>- ');
-        // Нумерация
-        html = html.replace(/(\d+\.) /g, '<br>$1 ');
-        // Переносы строк
-        html = html.replace(/\n/g, '<br>');
-        return html;
-    }
-
-    showSources(sources) {
-        const container = document.getElementById('chat-messages');
-        if (!container) return;
-
-        const sourcesDiv = document.createElement('div');
-        sourcesDiv.className = 'p-2 rounded-lg text-xs bg-blue-50 text-blue-600 mr-4 mb-1 mt-0.5';
-        sourcesDiv.innerHTML = '📚 <strong>Источники:</strong> ' + sources.map(s => s.source).join(', ');
-
-        container.appendChild(sourcesDiv);
-        container.scrollTop = container.scrollHeight;
-    }
-
-    showTypingIndicator() {
-        const container = document.getElementById('chat-messages');
-        if (!container) return;
-
-        const typingDiv = document.createElement('div');
-        typingDiv.id = 'typing-indicator';
-        typingDiv.className = 'p-2 rounded-lg text-xs bg-gray-100 text-gray-500 mr-4 mb-1';
-        typingDiv.innerHTML = '🤔 Агент думает <span class="typing-dots">...</span>';
-        container.appendChild(typingDiv);
-        container.scrollTop = container.scrollHeight;
-    }
-
-    hideTypingIndicator() {
-        const typingDiv = document.getElementById('typing-indicator');
-        if (typingDiv) typingDiv.remove();
-    }
-
-    async initLLM() {
-        console.log('🔄 Проверка LLM агента...');
-        try {
-            const response = await fetch('/api/llm/status');
-            const status = await response.json();
-
-            if (status.status === 'ready') {
-                console.log('✅ LLM агент готов');
-                this.addChatMessage('✅ AI помощник готов отвечать на вопросы по документации', 'assistant');
-            } else {
-                console.warn('⚠️ LLM агент не готов');
-                this.addChatMessage('⚠️ AI помощник временно недоступен. Проверьте настройки.', 'assistant');
-            }
-        } catch (error) {
-            console.error('❌ Ошибка подключения к LLM агенту:', error);
-            this.addChatMessage('❌ AI помощник недоступен. Убедитесь, что сервер запущен.', 'assistant');
-        }
-    }
-
-    updateClock() {
-        const mskNow = this.getMskTime();
-        const timeString = mskNow.toLocaleTimeString('ru-RU');
-        const timeSmall = document.getElementById('current-time-small');
-        if (timeSmall) timeSmall.textContent = timeString;
-    }
-
-    getMaxDate() {
-        return this.getTodayDate();
-    }
-
-    escapeHtml(str) {
-        if (!str) return '';
-        return str.replace(/[&<>]/g, function(m) {
-            if (m === '&') return '&amp;';
-            if (m === '<') return '&lt;';
-            if (m === '>') return '&gt;';
-            return m;
-        });
-    }
 }
 
-// Запуск
+// ==================== ЗАПУСК ====================
+
 document.addEventListener('DOMContentLoaded', () => {
     console.log('📄 DOM загружен');
     window.app = new DieselMonitoring();
 });
+
+// Глобальные функции для модального окна
+function closeExportModal() {
+    document.getElementById('exportModal').classList.remove('active');
+}
+
+function openExportModal() {
+    document.getElementById('exportModal').classList.add('active');
+}

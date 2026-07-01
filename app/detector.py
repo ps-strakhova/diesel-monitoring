@@ -1,4 +1,8 @@
-# app/detector_web.py
+# app/detector.py
+"""
+Детерминированные правила для обнаружения аномалий
+"""
+
 from __future__ import annotations
 from dataclasses import dataclass
 import time
@@ -8,364 +12,243 @@ from typing import Dict, Tuple, Optional, List
 @dataclass
 class Alert:
     severity: str  # "info" | "warn" | "alarm" | "critical"
-    code: str  # стабильный идентификатор (для ИИ/БЗ)
-    title: str  # короткий заголовок (БЕЗ СМАЙЛИКОВ)
-    details: str  # детали (без огромных инструкций)
-    catalog_id: Optional[int] = None  # на какой канал опирались
+    code: str
+    title: str
+    details: str
+    catalog_id: Optional[int] = None
 
 
 class RuleEngine:
     """
-    Правила уровня 1 (детерминированные).
+    Правила уровня 1 (детерминированные) для мониторинга параметров
     """
 
     def __init__(self, notify_cooldown_sec: int = 20):
         self.cooldown = notify_cooldown_sec
-        self._last_sent: Dict[str, int] = {}  # code -> unix ts последней отправки
-        self._last_state: Dict[str, str] = {}  # code -> последнее состояние (normal, warn, alarm)
+        self._last_sent: Dict[str, int] = {}
+        self._last_state: Dict[str, str] = {}
 
-        # Пороговые значения для 24В системы
+        # Пороговые значения
         self.thresholds = {
             # Температура ОЖ (°C)
-            "coolant_alarm_high": 95,
-            "coolant_warn_high": 90,
-            "coolant_info_low": 20,
-            "coolant_normal_low": 80,
-            "coolant_normal_high": 89,
-
+            "coolant": {"alarm": 95, "warn": 90, "info_low": 20, "normal": (80, 89)},
             # Давление масла (Бар)
-            "oil_alarm_low": 1.0,
-            "oil_warn_low": 2.0,
-            "oil_warn_high": 100.0,
-            "oil_normal_low": 2.1,
-            "oil_normal_high": 99.0,
-
+            "oil": {"alarm": 1.0, "warn": 2.0, "warn_high": 100.0, "normal": (2.1, 99.0)},
             # Уровень топлива (%)
-            "fuel_alarm_low": 10,
-            "fuel_warn_low": 20,
-            "fuel_normal": 21,
-
-            # Напряжение АКБ (В) - для 24В системы
-            "battery_alarm_low": 16.0,
-            "battery_warn_low": 18.0,
-            "battery_warn_high": 30.0,
-            "battery_alarm_high": 32.0,
-            "battery_normal_low": 20.0,
-            "battery_normal_high": 28.0,
-
+            "fuel": {"alarm": 10, "warn": 20, "normal": 21},
+            # Напряжение АКБ (В)
+            "battery": {"alarm": (16.0, 32.0), "warn": (18.0, 30.0), "normal": (20.0, 28.0)},
             # Частота сети (Гц)
-            "freq_alarm_low": 47,
-            "freq_alarm_high": 53,
-            "freq_warn_low": 48,
-            "freq_warn_high": 52,
-            "freq_normal_low": 49,
-            "freq_normal_high": 51,
-
+            "frequency": {"alarm": (47, 53), "warn": (48, 52), "normal": (49, 51)},
+            # Частота генератора (Гц)
+            "freq_gen": {"alarm": (47, 53), "warn": (48, 52), "normal": (49, 51)},
             # Обороты (RPM)
-            "rpm_on": 200,
-            "rpm_off": 50,
+            "rpm": {"on": 200, "off": 50},
         }
 
-    def _cooldown_ok(self, code: str, now: int) -> bool:
-        return True  # всегда разрешаем отправку
-
-    def _mark_sent(self, code: str, now: int) -> None:
-        self._last_sent[code] = now
-
-    def _get_state(self, code: str) -> str:
-        """Получает последнее состояние для кода"""
-        return self._last_state.get(code, "normal")
-
-    def _set_state(self, code: str, state: str) -> None:
-        """Устанавливает состояние для кода"""
-        self._last_state[code] = state
-
-    @staticmethod
-    def _get(v: Dict[str, Tuple[float, int]], name: str) -> Tuple[Optional[float], Optional[int]]:
+    def _get_value(self, latest: Dict[str, Tuple[float, int]], name: str) -> Tuple[Optional[float], Optional[int]]:
         """Безопасное получение значения из словаря"""
-        if name not in v:
+        if name not in latest:
             return None, None
-        val, cid = v[name]
+        val, cid = latest[name]
         try:
             return float(val), int(cid)
         except (ValueError, TypeError):
             return None, None
 
-    def _get_temperature_state(self, t_cool: float) -> str:
-        """Определяет состояние температуры"""
-        if t_cool > self.thresholds["coolant_alarm_high"]:
-            return "alarm"
-        elif t_cool > self.thresholds["coolant_warn_high"]:
-            return "warn"
-        else:
-            return "normal"
+    def _check_state_change(self, code: str, new_state: str,
+                            latest: Dict[str, Tuple[float, int]],
+                            param_name: str, param_value: float, param_cid: int,
+                            alarm_code: str, warn_code: str, normal_code: str,
+                            alarm_title: str, warn_title: str, normal_title: str,
+                            alarm_detail: str, warn_detail: str, normal_detail: str) -> List[Alert]:
+        """Универсальная проверка изменения состояния параметра"""
+        alerts: List[Alert] = []
+        now = int(time.time())
+        old_state = self._last_state.get(code, "normal")
 
-    def _get_battery_state(self, u_bat: float) -> str:
-        """Определяет состояние АКБ"""
-        if u_bat < self.thresholds["battery_alarm_low"] or u_bat > self.thresholds["battery_alarm_high"]:
-            return "alarm"
-        elif u_bat < self.thresholds["battery_warn_low"] or u_bat > self.thresholds["battery_warn_high"]:
-            return "warn"
-        else:
-            return "normal"
+        if new_state == old_state:
+            return alerts
 
-    def _get_oil_state(self, oil_p: float) -> str:
-        """Определяет состояние давления масла"""
-        if oil_p < self.thresholds["oil_alarm_low"] or oil_p > self.thresholds["oil_warn_high"]:
-            return "alarm"
-        elif oil_p < self.thresholds["oil_warn_low"]:
-            return "warn"
-        else:
-            return "normal"
+        self._last_state[code] = new_state
 
-    def _get_fuel_state(self, fuel: float) -> str:
-        """Определяет состояние уровня топлива"""
-        if fuel <= self.thresholds["fuel_alarm_low"]:
-            return "alarm"
-        elif fuel < self.thresholds["fuel_warn_low"]:
-            return "warn"
-        else:
-            return "normal"
+        if new_state == "alarm":
+            if self._cooldown_ok(alarm_code, now):
+                alerts.append(Alert(
+                    severity="alarm",
+                    code=alarm_code,
+                    title=alarm_title,
+                    details=alarm_detail,
+                    catalog_id=param_cid
+                ))
+                self._mark_sent(alarm_code, now)
+        elif new_state == "warn":
+            if self._cooldown_ok(warn_code, now):
+                alerts.append(Alert(
+                    severity="warn",
+                    code=warn_code,
+                    title=warn_title,
+                    details=warn_detail,
+                    catalog_id=param_cid
+                ))
+                self._mark_sent(warn_code, now)
+        elif new_state == "normal" and old_state != "normal":
+            if self._cooldown_ok(normal_code, now):
+                alerts.append(Alert(
+                    severity="info",
+                    code=normal_code,
+                    title=normal_title,
+                    details=normal_detail,
+                    catalog_id=param_cid
+                ))
+                self._mark_sent(normal_code, now)
 
-    def _get_freq_state(self, freq: float) -> str:
-        """Определяет состояние частоты"""
-        if freq < self.thresholds["freq_alarm_low"] or freq > self.thresholds["freq_alarm_high"]:
+        return alerts
+
+    def _cooldown_ok(self, code: str, now: int) -> bool:
+        return True
+
+    def _mark_sent(self, code: str, now: int) -> None:
+        self._last_sent[code] = now
+
+    def _get_state_float(self, value: float, alarm_range: Tuple[float, float],
+                         warn_range: Tuple[float, float], normal_range: Tuple[float, float]) -> str:
+        """Определяет состояние для числового параметра с диапазонами"""
+        if value < alarm_range[0] or value > alarm_range[1]:
             return "alarm"
-        elif freq < self.thresholds["freq_warn_low"] or freq > self.thresholds["freq_warn_high"]:
+        if value < warn_range[0] or value > warn_range[1]:
             return "warn"
-        else:
-            return "normal"
+        return "normal"
 
     def eval(self, latest: Dict[str, Tuple[float, int]]) -> List[Alert]:
-        """
-        Оценка текущих значений и генерация оповещений
-        """
-        now = int(time.time())
+        """Оценка текущих значений и генерация оповещений"""
         alerts: List[Alert] = []
 
         # Получаем все значения
-        rpm, rpm_cid = self._get(latest, "об/мин")
-        u_bat, bat_cid = self._get(latest, "Напряжение АКБ")
-        oil_p, oil_cid = self._get(latest, "Давление масла")
-        t_cool, t_cid = self._get(latest, "Температура ОЖ")
-        fuel, fuel_cid = self._get(latest, "Уровень топлива")
-        freq, freq_cid = self._get(latest, "Частота сети")
+        rpm, rpm_cid = self._get_value(latest, "об/мин")
+        u_bat, bat_cid = self._get_value(latest, "Напряжение АКБ")
+        oil_p, oil_cid = self._get_value(latest, "Давление масла")
+        t_cool, t_cid = self._get_value(latest, "Температура ОЖ")
+        fuel, fuel_cid = self._get_value(latest, "Уровень топлива")
+        freq, freq_cid = self._get_value(latest, "Частота сети")
+        freq_gen, freq_gen_cid = self._get_value(latest, "Частота генератора")
+
+        t = self.thresholds
 
         # ==================== ТЕМПЕРАТУРА ОЖ ====================
         if t_cool is not None:
-            new_state = self._get_temperature_state(t_cool)
-            old_state = self._get_state("TEMP")
+            new_state = "normal"
+            if t_cool > t["coolant"]["alarm"]:
+                new_state = "alarm"
+            elif t_cool > t["coolant"]["warn"]:
+                new_state = "warn"
 
-            if new_state != old_state:
-                self._set_state("TEMP", new_state)
-
-                if new_state == "alarm":
-                    if self._cooldown_ok("HIGH_COOLANT_TEMP_ALARM", now):
-                        alerts.append(Alert(
-                            severity="alarm",
-                            code="HIGH_COOLANT_TEMP_ALARM",
-                            title="КРИТИЧЕСКАЯ ТЕМПЕРАТУРА ОЖ",
-                            details=f"Температура ОЖ = {t_cool:.1f}°C (макс. {self.thresholds['coolant_alarm_high']}°C)",
-                            catalog_id=t_cid
-                        ))
-                        self._mark_sent("HIGH_COOLANT_TEMP_ALARM", now)
-                elif new_state == "warn":
-                    if self._cooldown_ok("HIGH_COOLANT_TEMP_WARN", now):
-                        alerts.append(Alert(
-                            severity="warn",
-                            code="HIGH_COOLANT_TEMP_WARN",
-                            title="Высокая температура ОЖ",
-                            details=f"Температура ОЖ = {t_cool:.1f}°C (норма до {self.thresholds['coolant_warn_high']}°C)",
-                            catalog_id=t_cid
-                        ))
-                        self._mark_sent("HIGH_COOLANT_TEMP_WARN", now)
-                elif new_state == "normal" and old_state != "normal":
-                    if self._cooldown_ok("TEMP_NORMAL", now):
-                        alerts.append(Alert(
-                            severity="info",
-                            code="TEMP_NORMAL",
-                            title="Температура ОЖ в норме",
-                            details=f"Температура ОЖ = {t_cool:.1f}°C",
-                            catalog_id=t_cid
-                        ))
-                        self._mark_sent("TEMP_NORMAL", now)
+            alerts.extend(self._check_state_change(
+                "TEMP", new_state, latest, "Температура ОЖ", t_cool, t_cid,
+                "HIGH_COOLANT_TEMP_ALARM", "HIGH_COOLANT_TEMP_WARN", "TEMP_NORMAL",
+                "КРИТИЧЕСКАЯ ТЕМПЕРАТУРА ОЖ", "Высокая температура ОЖ", "Температура ОЖ в норме",
+                f"Температура ОЖ = {t_cool:.1f}°C (макс. {t['coolant']['alarm']}°C)",
+                f"Температура ОЖ = {t_cool:.1f}°C (норма до {t['coolant']['warn']}°C)",
+                f"Температура ОЖ = {t_cool:.1f}°C"
+            ))
 
         # ==================== НАПРЯЖЕНИЕ АКБ ====================
         if u_bat is not None:
-            new_state = self._get_battery_state(u_bat)
-            old_state = self._get_state("BATTERY")
+            new_state = self._get_state_float(
+                u_bat,
+                t["battery"]["alarm"],
+                t["battery"]["warn"],
+                t["battery"]["normal"]
+            )
 
-            if new_state != old_state:
-                self._set_state("BATTERY", new_state)
+            alarm_code = "LOW_BATTERY_ALARM" if u_bat < t["battery"]["alarm"][0] else "HIGH_BATTERY_ALARM"
+            warn_code = "LOW_BATTERY_WARN" if u_bat < t["battery"]["warn"][0] else "HIGH_BATTERY_WARN"
+            alarm_title = "АВАРИЙНО НИЗКОЕ НАПРЯЖЕНИЕ АКБ" if u_bat < t["battery"]["alarm"][
+                0] else "АВАРИЙНО ВЫСОКОЕ НАПРЯЖЕНИЕ АКБ"
+            warn_title = "Низкое напряжение АКБ" if u_bat < t["battery"]["warn"][0] else "Повышенное напряжение АКБ"
+            alarm_detail = f"Напряжение АКБ = {u_bat:.1f}В (мин. {t['battery']['alarm'][0]}В)" if u_bat < \
+                                                                                                  t["battery"]["alarm"][
+                                                                                                      0] else f"Напряжение АКБ = {u_bat:.1f}В (макс. {t['battery']['alarm'][1]}В)"
+            warn_detail = f"Напряжение АКБ = {u_bat:.1f}В (норма >{t['battery']['warn'][0]}В)" if u_bat < \
+                                                                                                  t["battery"]["warn"][
+                                                                                                      0] else f"Напряжение АКБ = {u_bat:.1f}В (норма {t['battery']['warn'][0]}-{t['battery']['warn'][1]}В)"
 
-                if new_state == "alarm":
-                    if u_bat < self.thresholds["battery_alarm_low"]:
-                        if self._cooldown_ok("LOW_BATTERY_ALARM", now):
-                            alerts.append(Alert(
-                                severity="alarm",
-                                code="LOW_BATTERY_ALARM",
-                                title="АВАРИЙНО НИЗКОЕ НАПРЯЖЕНИЕ АКБ",
-                                details=f"Напряжение АКБ = {u_bat:.1f}В (мин. {self.thresholds['battery_alarm_low']}В)",
-                                catalog_id=bat_cid
-                            ))
-                            self._mark_sent("LOW_BATTERY_ALARM", now)
-                    else:
-                        if self._cooldown_ok("HIGH_BATTERY_ALARM", now):
-                            alerts.append(Alert(
-                                severity="alarm",
-                                code="HIGH_BATTERY_ALARM",
-                                title="АВАРИЙНО ВЫСОКОЕ НАПРЯЖЕНИЕ АКБ",
-                                details=f"Напряжение АКБ = {u_bat:.1f}В (макс. {self.thresholds['battery_alarm_high']}В)",
-                                catalog_id=bat_cid
-                            ))
-                            self._mark_sent("HIGH_BATTERY_ALARM", now)
-                elif new_state == "warn":
-                    if u_bat < self.thresholds["battery_warn_low"]:
-                        if self._cooldown_ok("LOW_BATTERY_WARN", now):
-                            alerts.append(Alert(
-                                severity="warn",
-                                code="LOW_BATTERY_WARN",
-                                title="Низкое напряжение АКБ",
-                                details=f"Напряжение АКБ = {u_bat:.1f}В (норма >{self.thresholds['battery_warn_low']}В)",
-                                catalog_id=bat_cid
-                            ))
-                            self._mark_sent("LOW_BATTERY_WARN", now)
-                    else:
-                        if self._cooldown_ok("HIGH_BATTERY_WARN", now):
-                            alerts.append(Alert(
-                                severity="warn",
-                                code="HIGH_BATTERY_WARN",
-                                title="Повышенное напряжение АКБ",
-                                details=f"Напряжение АКБ = {u_bat:.1f}В (норма {self.thresholds['battery_warn_low']}-{self.thresholds['battery_warn_high']}В)",
-                                catalog_id=bat_cid
-                            ))
-                            self._mark_sent("HIGH_BATTERY_WARN", now)
-                elif new_state == "normal" and old_state != "normal":
-                    if self._cooldown_ok("BATTERY_NORMAL", now):
-                        alerts.append(Alert(
-                            severity="info",
-                            code="BATTERY_NORMAL",
-                            title="Напряжение АКБ в норме",
-                            details=f"Напряжение АКБ = {u_bat:.1f}В",
-                            catalog_id=bat_cid
-                        ))
-                        self._mark_sent("BATTERY_NORMAL", now)
+            alerts.extend(self._check_state_change(
+                "BATTERY", new_state, latest, "Напряжение АКБ", u_bat, bat_cid,
+                alarm_code, warn_code, "BATTERY_NORMAL",
+                alarm_title, warn_title, "Напряжение АКБ в норме",
+                alarm_detail, warn_detail, f"Напряжение АКБ = {u_bat:.1f}В"
+            ))
 
         # ==================== ДАВЛЕНИЕ МАСЛА ====================
-        if rpm is not None and oil_p is not None and rpm > self.thresholds["rpm_on"]:
-            new_state = self._get_oil_state(oil_p)
-            old_state = self._get_state("OIL")
+        if rpm is not None and oil_p is not None and rpm > t["rpm"]["on"]:
+            new_state = "normal"
+            if oil_p < t["oil"]["alarm"] or oil_p > t["oil"]["warn_high"]:
+                new_state = "alarm"
+            elif oil_p < t["oil"]["warn"]:
+                new_state = "warn"
 
-            if new_state != old_state:
-                self._set_state("OIL", new_state)
-
-                if new_state == "alarm":
-                    if self._cooldown_ok("LOW_OIL_PRESSURE_ALARM", now):
-                        alerts.append(Alert(
-                            severity="alarm",
-                            code="LOW_OIL_PRESSURE_ALARM",
-                            title="АВАРИЙНО НИЗКОЕ ДАВЛЕНИЕ МАСЛА",
-                            details=f"Давление масла = {oil_p:.2f} Бар (мин. {self.thresholds['oil_alarm_low']} Бар)",
-                            catalog_id=oil_cid
-                        ))
-                        self._mark_sent("LOW_OIL_PRESSURE_ALARM", now)
-                elif new_state == "warn":
-                    if self._cooldown_ok("LOW_OIL_PRESSURE_WARN", now):
-                        alerts.append(Alert(
-                            severity="warn",
-                            code="LOW_OIL_PRESSURE_WARN",
-                            title="Низкое давление масла",
-                            details=f"Давление масла = {oil_p:.2f} Бар (норма >{self.thresholds['oil_warn_low']} Бар)",
-                            catalog_id=oil_cid
-                        ))
-                        self._mark_sent("LOW_OIL_PRESSURE_WARN", now)
-                elif new_state == "normal" and old_state != "normal":
-                    if self._cooldown_ok("OIL_NORMAL", now):
-                        alerts.append(Alert(
-                            severity="info",
-                            code="OIL_NORMAL",
-                            title="Давление масла в норме",
-                            details=f"Давление масла = {oil_p:.2f} Бар",
-                            catalog_id=oil_cid
-                        ))
-                        self._mark_sent("OIL_NORMAL", now)
+            alerts.extend(self._check_state_change(
+                "OIL", new_state, latest, "Давление масла", oil_p, oil_cid,
+                "LOW_OIL_PRESSURE_ALARM", "LOW_OIL_PRESSURE_WARN", "OIL_NORMAL",
+                "АВАРИЙНО НИЗКОЕ ДАВЛЕНИЕ МАСЛА", "Низкое давление масла", "Давление масла в норме",
+                f"Давление масла = {oil_p:.2f} Бар (мин. {t['oil']['alarm']} Бар)",
+                f"Давление масла = {oil_p:.2f} Бар (норма >{t['oil']['warn']} Бар)",
+                f"Давление масла = {oil_p:.2f} Бар"
+            ))
 
         # ==================== УРОВЕНЬ ТОПЛИВА ====================
         if fuel is not None:
-            new_state = self._get_fuel_state(fuel)
-            old_state = self._get_state("FUEL")
+            new_state = "normal"
+            if fuel <= t["fuel"]["alarm"]:
+                new_state = "alarm"
+            elif fuel < t["fuel"]["warn"]:
+                new_state = "warn"
 
-            if new_state != old_state:
-                self._set_state("FUEL", new_state)
-
-                if new_state == "alarm":
-                    if self._cooldown_ok("LOW_FUEL_ALARM", now):
-                        alerts.append(Alert(
-                            severity="alarm",
-                            code="LOW_FUEL_ALARM",
-                            title="КРИТИЧЕСКИ НИЗКИЙ УРОВЕНЬ ТОПЛИВА",
-                            details=f"Уровень топлива = {fuel:.1f}% (мин. {self.thresholds['fuel_alarm_low']}%)",
-                            catalog_id=fuel_cid
-                        ))
-                        self._mark_sent("LOW_FUEL_ALARM", now)
-                elif new_state == "warn":
-                    if self._cooldown_ok("LOW_FUEL_WARN", now):
-                        alerts.append(Alert(
-                            severity="warn",
-                            code="LOW_FUEL_WARN",
-                            title="Низкий уровень топлива",
-                            details=f"Уровень топлива = {fuel:.1f}% (норма >{self.thresholds['fuel_warn_low']}%)",
-                            catalog_id=fuel_cid
-                        ))
-                        self._mark_sent("LOW_FUEL_WARN", now)
-                elif new_state == "normal" and old_state != "normal":
-                    if self._cooldown_ok("FUEL_NORMAL", now):
-                        alerts.append(Alert(
-                            severity="info",
-                            code="FUEL_NORMAL",
-                            title="Уровень топлива в норме",
-                            details=f"Уровень топлива = {fuel:.1f}%",
-                            catalog_id=fuel_cid
-                        ))
-                        self._mark_sent("FUEL_NORMAL", now)
+            alerts.extend(self._check_state_change(
+                "FUEL", new_state, latest, "Уровень топлива", fuel, fuel_cid,
+                "LOW_FUEL_ALARM", "LOW_FUEL_WARN", "FUEL_NORMAL",
+                "КРИТИЧЕСКИ НИЗКИЙ УРОВЕНЬ ТОПЛИВА", "Низкий уровень топлива", "Уровень топлива в норме",
+                f"Уровень топлива = {fuel:.1f}% (мин. {t['fuel']['alarm']}%)",
+                f"Уровень топлива = {fuel:.1f}% (норма >{t['fuel']['warn']}%)",
+                f"Уровень топлива = {fuel:.1f}%"
+            ))
 
         # ==================== ЧАСТОТА СЕТИ ====================
-        if freq is not None and rpm is not None and rpm > self.thresholds["rpm_on"]:
-            new_state = self._get_freq_state(freq)
-            old_state = self._get_state("FREQ")
+        if freq is not None and rpm is not None and rpm > t["rpm"]["on"]:
+            new_state = self._get_state_float(
+                freq,
+                t["frequency"]["alarm"],
+                t["frequency"]["warn"],
+                t["frequency"]["normal"]
+            )
 
-            if new_state != old_state:
-                self._set_state("FREQ", new_state)
+            alerts.extend(self._check_state_change(
+                "FREQ", new_state, latest, "Частота сети", freq, freq_cid,
+                "FREQUENCY_ALARM", "FREQUENCY_WARN", "FREQ_NORMAL",
+                "КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ ЧАСТОТЫ СЕТИ", "Отклонение частоты сети", "Частота сети в норме",
+                f"Частота сети = {freq:.1f}Гц (норма {t['frequency']['alarm'][0]}-{t['frequency']['alarm'][1]}Гц)",
+                f"Частота сети = {freq:.1f}Гц (норма {t['frequency']['warn'][0]}-{t['frequency']['warn'][1]}Гц)",
+                f"Частота сети = {freq:.1f}Гц"
+            ))
 
-                if new_state == "alarm":
-                    if self._cooldown_ok("FREQUENCY_ALARM", now):
-                        alerts.append(Alert(
-                            severity="alarm",
-                            code="FREQUENCY_ALARM",
-                            title="КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ ЧАСТОТЫ",
-                            details=f"Частота сети = {freq:.1f}Гц (норма {self.thresholds['freq_alarm_low']}-{self.thresholds['freq_alarm_high']}Гц)",
-                            catalog_id=freq_cid
-                        ))
-                        self._mark_sent("FREQUENCY_ALARM", now)
-                elif new_state == "warn":
-                    if self._cooldown_ok("FREQUENCY_WARN", now):
-                        alerts.append(Alert(
-                            severity="warn",
-                            code="FREQUENCY_WARN",
-                            title="Отклонение частоты сети",
-                            details=f"Частота сети = {freq:.1f}Гц (норма {self.thresholds['freq_warn_low']}-{self.thresholds['freq_warn_high']}Гц)",
-                            catalog_id=freq_cid
-                        ))
-                        self._mark_sent("FREQUENCY_WARN", now)
-                elif new_state == "normal" and old_state != "normal":
-                    if self._cooldown_ok("FREQ_NORMAL", now):
-                        alerts.append(Alert(
-                            severity="info",
-                            code="FREQ_NORMAL",
-                            title="Частота сети в норме",
-                            details=f"Частота сети = {freq:.1f}Гц",
-                            catalog_id=freq_cid
-                        ))
-                        self._mark_sent("FREQ_NORMAL", now)
+        # ==================== ЧАСТОТА ГЕНЕРАТОРА ====================
+        if freq_gen is not None and rpm is not None and rpm > t["rpm"]["on"]:
+            new_state = self._get_state_float(
+                freq_gen,
+                t["freq_gen"]["alarm"],
+                t["freq_gen"]["warn"],
+                t["freq_gen"]["normal"]
+            )
+
+            alerts.extend(self._check_state_change(
+                "FREQ_GEN", new_state, latest, "Частота генератора", freq_gen, freq_gen_cid,
+                "FREQ_GEN_ALARM", "FREQ_GEN_WARN", "FREQ_GEN_NORMAL",
+                "КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ ЧАСТОТЫ ГЕНЕРАТОРА", "Отклонение частоты генератора",
+                "Частота генератора в норме",
+                f"Частота генератора = {freq_gen:.1f}Гц (норма {t['freq_gen']['alarm'][0]}-{t['freq_gen']['alarm'][1]}Гц)",
+                f"Частота генератора = {freq_gen:.1f}Гц (норма {t['freq_gen']['warn'][0]}-{t['freq_gen']['warn'][1]}Гц)",
+                f"Частота генератора = {freq_gen:.1f}Гц"
+            ))
 
         return alerts

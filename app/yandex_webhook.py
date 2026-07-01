@@ -1,8 +1,7 @@
-# app/yandex_webhook.py (обновлённая версия)
 from __future__ import annotations
 import logging
 from fastapi import FastAPI, Request
-from .yandex_commands import YandexCommandHandler
+from .command_processor import CommandProcessor
 from .status_renderer import render_status_text
 
 logger = logging.getLogger(__name__)
@@ -11,22 +10,29 @@ webhook_app = FastAPI()
 command_handler = None
 monitor_instance = None
 
+
 def init_webhook_handler(monitor):
+    """Инициализация обработчика вебхуков"""
     global command_handler, monitor_instance
-    # передаём monitor, чтобы handler мог получить db_path, unit_name, ya и т.д.
-    command_handler = YandexCommandHandler(monitor.db_path, monitor=monitor)
+    # ✅ СОЗДАЕМ ЭКЗЕМПЛЯР CommandProcessor
+    command_handler = CommandProcessor(monitor.db_path, monitor=monitor)
     monitor_instance = monitor
+    print("✅ Яндекс вебхук обработчик инициализирован")
+
 
 @webhook_app.post("/webhook")
 async def yandex_webhook(request: Request):
+    """Обработка вебхука от Яндекс.Мессенджера"""
     global command_handler, monitor_instance
 
     try:
         body = await request.json()
-        logger.info(f"Received webhook: {body}")
+        print(f"📨 Получен вебхук: {body}")
 
         message = body.get("message", {})
         text = message.get("text", "")
+        print(f"📝 Текст: {text}")
+
         user_id = message.get("from", {}).get("id", "unknown")
         chat_id = message.get("chat", {}).get("id")
         reply_to_msg_id = message.get("reply_to_message_id")
@@ -35,11 +41,11 @@ async def yandex_webhook(request: Request):
         if not text:
             return {"ok": True}
 
-        # 1. Если это ответ (реплай) на наше уведомление – отправляем статус
+        # ✅ 1. Если это ответ (реплай) на наше уведомление
         if reply_to_msg_id and monitor_instance and monitor_instance.ya:
             code = monitor_instance.ya.get_code_by_message_id(str(reply_to_msg_id))
             if code:
-                # Важные коды – полный статус, иначе компактный
+                print(f"↩️ Ответ на уведомление с code={code}")
                 important_codes = {"UNIT_STOP", "AL_MAINS_FAIL", "LOW_OIL_PRESSURE", "HIGH_TEMP"}
                 if code in important_codes:
                     status = render_status_text(monitor_instance.db_path)
@@ -48,20 +54,28 @@ async def yandex_webhook(request: Request):
                 monitor_instance.ya.send_reply(status, reply_to_msg_id, chat_id)
                 return {"ok": True}
 
-        # 2. Обработка команд (включая обычные текстовые сообщения)
+        # ✅ 2. Обработка команд через CommandProcessor
         if command_handler:
-            response = command_handler.handle_command(text, str(user_id))
+            print(f"🔍 Обработка команды в Яндекс: {text}")
+            response = command_handler.process_command(text, str(user_id), str(chat_id))
             if response:
-                # Если есть current_msg_id – отвечаем реплаем, иначе просто отправляем
+                print(f"✅ Ответ Яндекс: {response[:100]}...")
                 if current_msg_id:
                     monitor_instance.ya.send_reply(response, current_msg_id, chat_id)
                 else:
                     monitor_instance.ya.send(response, chat_id=chat_id)
+            else:
+                # Если команда не распознана, но это была команда
+                if text.startswith("/"):
+                    monitor_instance.ya.send_reply(
+                        "❌ Неизвестная команда. Используйте /help",
+                        current_msg_id, chat_id
+                    )
         else:
-            # Если command_handler не инициализирован – просто заглушка
+            print("❌ Command handler не инициализирован")
             if current_msg_id and monitor_instance and monitor_instance.ya:
                 monitor_instance.ya.send_reply(
-                    "Бот временно недоступен. Попробуйте позже.",
+                    "⚠️ Бот временно недоступен. Попробуйте позже.",
                     current_msg_id, chat_id
                 )
 
@@ -69,9 +83,12 @@ async def yandex_webhook(request: Request):
 
     except Exception as e:
         logger.error(f"Webhook error: {e}")
+        print(f"❌ Ошибка вебхука: {e}")
         return {"ok": False, "error": str(e)}
 
-def start_webhook_server(port: int = 5001):
+
+def start_webhook_server(port: int = 5002):
+    """Запуск сервера вебхуков"""
     import uvicorn
     from threading import Thread
 
@@ -80,4 +97,5 @@ def start_webhook_server(port: int = 5001):
 
     thread = Thread(target=run, daemon=True)
     thread.start()
-    logger.info(f"Webhook server started on port {port}")
+    logger.info(f"✅ Webhook server started on port {port}")
+    print(f"✅ Яндекс вебхук сервер запущен на порту {port}")
