@@ -413,15 +413,28 @@ class StatusService:
                             })
 
                         # Частота генератора (адрес 1017)
-                        elif addr == 1017 and (val < 47 or val > 53):
-                            alerts.append({
-                                'severity': 'alarm' if (val < 47 or val > 53) else 'warn',
-                                'code': 'FREQ_GEN_ALARM',
-                                'title': 'КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ ЧАСТОТЫ ГЕНЕРАТОРА',
-                                'details': f'Частота генератора: {val:.1f}Гц (норма 47-53Гц)',
-                                'controller_id': ctrl_id,
-                                'controller_name': ctrl_name
-                            })
+                        elif addr == 1017:
+                            # Получаем текущие обороты
+                            rpm_cursor = db.execute("""
+                                        SELECT lv.last_value_text
+                                        FROM last_value lv
+                                        JOIN register_catalog rc ON rc.id = lv.catalog_id
+                                        WHERE rc.addr = 1000
+                                        LIMIT 1
+                                    """)
+                            rpm_row = rpm_cursor.fetchone()
+                            rpm = float(rpm_row[0]) if rpm_row and rpm_row[0] else 0
+
+                            # Проверяем частоту только если двигатель работает (RPM > 200)
+                            if rpm > 200 and (val < 47 or val > 53):
+                                alerts.append({
+                                    'severity': 'alarm' if (val < 47 or val > 53) else 'warn',
+                                    'code': 'FREQ_GEN_ALARM',
+                                    'title': 'КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ ЧАСТОТЫ ГЕНЕРАТОРА',
+                                    'details': f'Частота генератора: {val:.1f}Гц (норма 47-53Гц)',
+                                    'controller_id': ctrl_id,
+                                    'controller_name': ctrl_name
+                                })
 
                         # Напряжение сети L1-N (адрес 1030)
                         elif addr == 1030 and (val < 207 or val > 253):
