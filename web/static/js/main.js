@@ -1464,9 +1464,9 @@ async downloadServiceAct(type = 'service') {
         const serviceBtn = document.getElementById('export-act-service');
         const claimBtn = document.getElementById('export-act-claim');
         const workBtn = document.getElementById('export-work-order');
-        if (serviceBtn) serviceBtn.onclick = () => this.generateServiceAct('service');
-        if (claimBtn) claimBtn.onclick = () => this.generateServiceAct('claim');
-        if (workBtn) workBtn.onclick = () => this.generateServiceAct('work_order');
+        if (serviceBtn) serviceBtn.onclick = () => this.downloadServiceAct('service');
+        if (claimBtn) claimBtn.onclick = () => this.downloadServiceAct('claim');
+        if (workBtn) workBtn.onclick = () => this.downloadServiceAct('work_order');
     }
 
     // ==================== ПРИВАТНЫЕ МЕТОДЫ ====================
