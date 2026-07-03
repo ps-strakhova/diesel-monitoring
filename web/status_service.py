@@ -247,6 +247,10 @@ class StatusService:
     async def get_current_alerts(self, db, controller_id):
         try:
             alerts = []
+
+            # 🔧 БИТЫ, КОТОРЫЕ НУЖНО СКРЫТЬ ИЗ ТЕКУЩИХ АВАРИЙ
+            HIDDEN_BITS = {24, 74}  # Добавьте сюда все биты, которые не нужно показывать
+
             # Получаем список контроллеров
             if controller_id:
                 cursor = db.execute("SELECT id, name FROM controllers WHERE id = ?", (controller_id,))
@@ -270,6 +274,11 @@ class StatusService:
 
                 for row in cursor.fetchall():
                     name, addr, val = row
+
+                    # 🔧 ПРОПУСКАЕМ СКРЫТЫЕ БИТЫ
+                    if addr in HIDDEN_BITS:
+                        continue
+
                     cursor_check = db.execute("""
                         SELECT 1 FROM events 
                         WHERE code = ? 
@@ -284,9 +293,36 @@ class StatusService:
                         clean_name = re.sub(r'^\d+\s+', '', str(name))
                         clean_name = re.sub(r'\s+', ' ', clean_name).strip()
 
+                    # 🔧 СПЕЦИАЛЬНАЯ ОБРАБОТКА ДЛЯ BIT_230 И BIT_257
+                    if addr == 230:
+                        if 'ВКЛ' in (name or ''):
+                            alerts.append({
+                                'severity': 'warn',
+                                'code': f'BIT_{addr}',
+                                'title': clean_name,
+                                'details': '⚠️ Напряжение сети вне нормы (207-253В)',
+                                'controller_id': ctrl_id,
+                                'controller_name': ctrl_name
+                            })
+                        continue
+
+                    elif addr == 257:
+                        if 'ВКЛ' in (name or ''):
+                            alerts.append({
+                                'severity': 'warn',
+                                'code': f'BIT_{addr}',
+                                'title': clean_name,
+                                'details': '⚠️ Частота сети вне нормы (47-53Гц)',
+                                'controller_id': ctrl_id,
+                                'controller_name': ctrl_name
+                            })
+                        continue
+
+                    # Обычная обработка для остальных битов
                     title_lower = (name or '').lower()
 
-                    if any(k in title_lower for k in ['авар', 'критич', 'alarm', 'ост', 'shutdown', 'стоп', 'рво', 'пожар']):
+                    if any(k in title_lower for k in
+                           ['авар', 'критич', 'alarm', 'ост', 'shutdown', 'стоп', 'рво', 'пожар']):
                         alerts.append({
                             'severity': 'alarm',
                             'code': f'BIT_{addr}',
@@ -365,18 +401,18 @@ class StatusService:
                                 'controller_name': ctrl_name
                             })
 
-                        # Частота
+                        # Частота сети (адрес 1029)
                         elif addr == 1029 and (val < 47 or val > 53):
                             alerts.append({
                                 'severity': 'alarm' if (val < 47 or val > 53) else 'warn',
                                 'code': 'FREQ_ALARM',
                                 'title': 'КРИТИЧЕСКОЕ ОТКЛОНЕНИЕ ЧАСТОТЫ СЕТИ',
-                                'details': f'Частота: {val:.1f}Гц',
+                                'details': f'Частота сети: {val:.1f}Гц (норма 47-53Гц)',
                                 'controller_id': ctrl_id,
                                 'controller_name': ctrl_name
                             })
 
-                        # Частота генератора (адрес 1017) - ДОБАВЛЕНО
+                        # Частота генератора (адрес 1017)
                         elif addr == 1017 and (val < 47 or val > 53):
                             alerts.append({
                                 'severity': 'alarm' if (val < 47 or val > 53) else 'warn',

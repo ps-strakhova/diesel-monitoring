@@ -234,6 +234,7 @@ class RuleEngine:
 
         # ==================== ЧАСТОТА ГЕНЕРАТОРА ====================
         if freq_gen is not None and rpm is not None and rpm > t["rpm"]["on"]:
+            # Проверяем частоту только если двигатель работает (RPM > 200)
             new_state = self._get_state_float(
                 freq_gen,
                 t["freq_gen"]["alarm"],
